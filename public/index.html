@@ -225,31 +225,60 @@
       }
     }
 
+    function appendPointText(element, text) {
+      if (/^\*\*[^*]+\*\*/.test(text)) {
+        appendInlineText(element, text);
+        return;
+      }
+
+      const separator = text.search(/[:,;](?:\s|$)/);
+      const words = text.split(/\s+/);
+      const fallbackEnd = words.slice(0, Math.min(8, words.length)).join(" ").length;
+      const leadEnd = separator >= 12 && separator <= 180 ? separator : fallbackEnd;
+      const lead = text.slice(0, leadEnd).replace(/[.:;]+$/, "");
+      const detail = text.slice(leadEnd).replace(/^[:,;]?\s*/, "");
+      const strong = document.createElement("strong");
+      strong.textContent = `${lead}:`;
+      element.append(strong);
+      if (detail) element.append(document.createTextNode(` ${detail}`));
+    }
+
     function renderSummary(markdown) {
       const container = document.getElementById("result-summary");
       container.replaceChildren();
       let list = null;
+      let nextIndex = 1;
       for (const rawLine of markdown.split(/\r?\n/)) {
         const line = rawLine.trim();
         if (!line) {
           continue;
         }
-        const heading = line.match(/^(#{1,3})\s+(.+)$/);
-        const item = line.match(/^(\d+)\.\s+(.+)$/);
+        const heading = line.match(/^(#{1,4})\s+(.+)$/);
+        const topic = line.match(/^\*\*(.+?)\*\*:?$/);
+        const numberedItem = line.match(/^(\d+)[.)]\s+(.+)$/);
+        const bulletItem = line.match(/^[-*•]\s+(.+)$/);
+        const item = numberedItem || bulletItem;
         let element;
         if (heading) {
           list = null;
-          element = document.createElement(heading[1].length === 3 ? "h4" : "h3");
-          appendInlineText(element, heading[2]);
+          element = document.createElement(heading[1].length >= 3 ? "h4" : "h3");
+          const headingText = /^overview$/i.test(heading[2]) ? "Summary" : heading[2];
+          appendInlineText(element, headingText);
+        } else if (topic) {
+          list = null;
+          element = document.createElement("h4");
+          appendInlineText(element, topic[1].replace(/:$/, ""));
         } else if (item) {
           if (!list) {
             list = document.createElement("ol");
             container.append(list);
           }
           element = document.createElement("li");
-          element.dataset.index = item[1].padStart(2, "0");
-          appendInlineText(element, item[2]);
+          const index = numberedItem ? Number(numberedItem[1]) : nextIndex;
+          element.dataset.index = String(index).padStart(2, "0");
+          appendPointText(element, numberedItem ? numberedItem[2] : bulletItem[1]);
           list.append(element);
+          nextIndex = index + 1;
           continue;
         } else {
           list = null;
