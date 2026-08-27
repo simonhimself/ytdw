@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="YT;DW turns captioned YouTube videos into concise reading briefs.">
+  <title>YT;DW | YouTube, Didn't Watch</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2318181b'/%3E%3Cpath d='M17.5 6 15 18h5l-6 8 2.5-7h-5l6-13Z' fill='%23f48120'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    try {
+      document.documentElement.dataset.mode = localStorage.getItem("ytdw-theme") === "dark" ? "dark" : "light";
+    } catch {
+      document.documentElement.dataset.mode = "light";
+    }
+  </script>
+  <link rel="stylesheet" href="/styles.css">
+  <script>
+    let turnstileWidgetId;
+    let turnstileToken = "";
+    let pendingSubmit = false;
+    function setSubmitState() {
+      const button = document.getElementById("submit-button");
+      const input = document.getElementById("youtube-url");
+      if (button && input) button.disabled = !input.validity.valid || button.dataset.busy === "true";
+    }
+    function showTurnstileError(message) {
+      const error = document.getElementById("turnstile-error");
+      if (!error) return;
+      error.textContent = message;
+      error.hidden = !message;
+    }
+    function onTurnstileLoad() {
+      turnstileWidgetId = turnstile.render("#turnstile-widget", {
+        sitekey: "0x4AAAAAAEeANLj7coT90tAS",
+        action: "summarize",
+        execution: "execute",
+        appearance: "interaction-only",
+        callback(token) {
+          turnstileToken = token;
+          showTurnstileError("");
+          setSubmitState();
+          if (pendingSubmit) {
+            pendingSubmit = false;
+            document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
+            document.getElementById("summary-form").requestSubmit();
+          }
+        },
+        "expired-callback"() {
+          turnstileToken = "";
+          pendingSubmit = false;
+          document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
+          showTurnstileError("Verification expired. Please complete it again.");
+          setSubmitState();
+        },
+        "error-callback"() {
+          turnstileToken = "";
+          pendingSubmit = false;
+          document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
+          showTurnstileError("Verification could not load. Check your connection and retry.");
+          setSubmitState();
+        },
+        "timeout-callback"() {
+          turnstileToken = "";
+          pendingSubmit = false;
+          document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
+          showTurnstileError("Verification timed out. Please try again.");
+          setSubmitState();
+        }
+      });
+    }
+  </script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit" async defer></script>
+  <script>
+    window.setTimeout(() => {
+      if (typeof window.turnstile === "undefined") {
+        showTurnstileError("Verification is blocked or unavailable. Allow challenges.cloudflare.com and reload.");
+      }
+    }, 8000);
+  </script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="wordmark wordmark--small" href="/" aria-label="YT;DW home">
+      <span>YT</span><span class="wordmark__semicolon">;</span><span>DW</span>
+    </a>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+      <svg class="theme-toggle__sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.25"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.35 4.35l1.42 1.42M14.23 14.23l1.42 1.42M15.65 4.35l-1.42 1.42M5.77 14.23l-1.42 1.42"/></svg>
+      <svg class="theme-toggle__moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 12.35A6.75 6.75 0 0 1 7.65 3.8a6.75 6.75 0 1 0 8.55 8.55Z"/></svg>
+    </button>
+  </header>
+
+  <main class="app-main">
+    <section class="workspace" aria-labelledby="page-title">
+      <div class="intro">
+        <h1 id="page-title" class="wordmark wordmark--hero"><span>YT</span><span class="wordmark__semicolon">;</span><span>DW</span></h1>
+        <p class="tagline">YouTube, Didn’t Watch.</p>
+        <p class="intro__copy">Paste a captioned video. Keep the useful parts.</p>
+      </div>
+
+      <form id="summary-form" class="composer">
+        <label class="sr-only" for="youtube-url">YouTube URL</label>
+        <div class="input-shell">
+          <svg class="input-shell__play" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 6 6 4-6 4V6Z"/></svg>
+          <input id="youtube-url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="Paste a YouTube URL" required aria-describedby="url-help">
+          <button id="submit-button" type="submit" disabled>
+            <span class="button-label">Summarize</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <p id="url-help" class="field-help">English captions · Videos up to six hours</p>
+        <div id="turnstile-widget" class="turnstile"></div>
+        <p class="verification-note">Protected quietly by Turnstile</p>
+        <p id="turnstile-error" class="turnstile-error" role="alert" hidden></p>
+      </form>
+
+      <div id="status" class="status" aria-live="polite" hidden>
+        <span class="status__semicolon" aria-hidden="true">;</span>
+        <div>
+          <strong id="status-title">Opening the video</strong>
+          <span id="status-detail">Starting a secure media worker</span>
+        </div>
+      </div>
+
+      <div id="error" class="error" role="alert" hidden>
+        <strong>Could not summarize this video</strong>
+        <span id="error-message"></span>
+      </div>
+
+      <article id="result" class="result" tabindex="-1" hidden>
+        <header class="result__header">
+          <div>
+            <p class="result__meta"><span id="result-channel"></span><span aria-hidden="true">·</span><span id="result-duration"></span></p>
+            <h2 id="result-title"></h2>
+          </div>
+          <button id="copy-button" class="copy-button" type="button">Copy</button>
+        </header>
+        <div id="result-summary" class="result__summary"></div>
+        <footer class="result__footer">
+          <span>Generated from the video's captions</span>
+          <span id="transcript-note"></span>
+        </footer>
+      </article>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    <span>Captions processed ephemerally</span>
+    <details id="cloudflare-stack" class="cloudflare-stack">
+      <summary><span class="cloudflare-dot" aria-hidden="true"></span>Powered by Cloudflare</summary>
+      <div class="stack-popover">
+        <p class="stack-popover__title">Built on Cloudflare</p>
+        <dl>
+          <div><dt>Workers</dt><dd>Serves the app and API at the edge.</dd></div>
+          <div><dt>Turnstile</dt><dd>Stops automated abuse without a CAPTCHA.</dd></div>
+          <div><dt>Sandbox</dt><dd>Retrieves public YouTube captions.</dd></div>
+          <div><dt>Durable Objects</dt><dd>Coordinates and deduplicates jobs.</dd></div>
+          <div><dt>Workers AI</dt><dd>Writes the brief with GLM 5.3.</dd></div>
+          <div><dt>Cache</dt><dd>Reuses completed briefs for 24 hours.</dd></div>
+        </dl>
+      </div>
+    </details>
+  </footer>
+
+  <script>
+    const form = document.getElementById("summary-form");
+    const submitButton = document.getElementById("submit-button");
+    const status = document.getElementById("status");
+    const statusTitle = document.getElementById("status-title");
+    const statusDetail = document.getElementById("status-detail");
+    const error = document.getElementById("error");
+    const errorMessage = document.getElementById("error-message");
+    const result = document.getElementById("result");
+    const themeToggle = document.getElementById("theme-toggle");
+    const stackDetails = document.getElementById("cloudflare-stack");
+    document.getElementById("youtube-url").addEventListener("input", setSubmitState);
+    const steps = [
+      ["Opening the video", "Starting a secure media worker"],
+      ["Reading the captions", "Separating dialogue from timing data"],
+      ["Finding the signal", "Distilling claims, facts, and conclusions"]
+    ];
+
+    function formatDuration(seconds) {
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+      const remaining = minutes % 60;
+      return hours ? `${hours}h ${remaining}m` : `${minutes} min`;
+    }
+
+    function setTheme(mode) {
+      document.documentElement.dataset.mode = mode;
+      themeToggle.setAttribute("aria-pressed", String(mode === "dark"));
+      themeToggle.setAttribute("aria-label", `Switch to ${mode === "dark" ? "light" : "dark"} mode`);
+    }
+
+    setTheme(document.documentElement.dataset.mode === "dark" ? "dark" : "light");
+    themeToggle.addEventListener("click", () => {
+      const mode = document.documentElement.dataset.mode === "dark" ? "light" : "dark";
+      setTheme(mode);
+      try { localStorage.setItem("ytdw-theme", mode); } catch {}
+    });
+
+    document.addEventListener("click", (event) => {
+      if (stackDetails.open && !stackDetails.contains(event.target)) stackDetails.open = false;
+    });
+    stackDetails.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        stackDetails.open = false;
+        stackDetails.querySelector("summary").focus();
+      }
+    });
+
+    function appendInlineText(element, text) {
+      const parts = text.split(/(\*\*[^*]+\*\*)/g);
+      for (const part of parts) {
+        if (part.startsWith("**") && part.endsWith("**")) {
+          const strong = document.createElement("strong");
+          strong.textContent = part.slice(2, -2);
+          element.append(strong);
+        } else {
+          element.append(document.createTextNode(part));
+        }
+      }
+    }
+
+    function renderSummary(markdown) {
+      const container = document.getElementById("result-summary");
+      container.replaceChildren();
+      let list = null;
+      for (const rawLine of markdown.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) {
+          continue;
+        }
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        const item = line.match(/^(\d+)\.\s+(.+)$/);
+        let element;
+        if (heading) {
+          list = null;
+          element = document.createElement(heading[1].length === 3 ? "h4" : "h3");
+          appendInlineText(element, heading[2]);
+        } else if (item) {
+          if (!list) {
+            list = document.createElement("ol");
+            container.append(list);
+          }
+          element = document.createElement("li");
+          element.dataset.index = item[1].padStart(2, "0");
+          appendInlineText(element, item[2]);
+          list.append(element);
+          continue;
+        } else {
+          list = null;
+          element = document.createElement("p");
+          appendInlineText(element, line);
+        }
+        container.append(element);
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!turnstileToken) {
+        if (!window.turnstile || turnstileWidgetId === undefined) {
+          showTurnstileError("Verification is not ready. Reload the page or allow challenges.cloudflare.com.");
+          return;
+        }
+        pendingSubmit = true;
+        submitButton.querySelector(".button-label").textContent = "Verifying";
+        turnstile.execute(turnstileWidgetId);
+        return;
+      }
+
+      submitButton.dataset.busy = "true";
+      submitButton.querySelector(".button-label").textContent = "Working";
+      document.body.classList.add("is-busy");
+      setSubmitState();
+      error.hidden = true;
+      result.hidden = true;
+      status.hidden = false;
+
+      let step = 0;
+      const stepTimer = setInterval(() => {
+        step = Math.min(step + 1, steps.length - 1);
+        [statusTitle.textContent, statusDetail.textContent] = steps[step];
+      }, 4500);
+
+      try {
+        const response = await fetch("/api/summarize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            url: new FormData(form).get("url"),
+            turnstileToken
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unexpected response");
+
+        document.getElementById("result-channel").textContent = data.uploader || "YouTube";
+        document.getElementById("result-title").textContent = data.title;
+        document.getElementById("result-duration").textContent = formatDuration(data.duration);
+        document.getElementById("transcript-note").textContent = data.transcriptTruncated ? "Long transcript condensed" : "Full transcript processed";
+        renderSummary(data.summary);
+        document.body.classList.add("has-result");
+        result.hidden = false;
+        result.focus({ preventScroll: true });
+        const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        result.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+      } catch (requestError) {
+        errorMessage.textContent = requestError instanceof Error ? requestError.message : "Please try again.";
+        error.hidden = false;
+      } finally {
+        clearInterval(stepTimer);
+        status.hidden = true;
+        document.body.classList.remove("is-busy");
+        submitButton.dataset.busy = "false";
+        submitButton.querySelector(".button-label").textContent = "Summarize";
+        turnstileToken = "";
+        if (window.turnstile && turnstileWidgetId !== undefined) turnstile.reset(turnstileWidgetId);
+        setSubmitState();
+      }
+    });
+
+    document.getElementById("copy-button").addEventListener("click", async (event) => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById("result-summary").textContent);
+        event.currentTarget.textContent = "Copied";
+      } catch {
+        event.currentTarget.textContent = "Copy failed";
+      }
+      setTimeout(() => { event.currentTarget.textContent = "Copy"; }, 1400);
+    });
+  </script>
+</body>
+</html>
