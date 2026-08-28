@@ -206,6 +206,12 @@
     document.addEventListener("click", (event) => {
       if (stackDetails.open && !stackDetails.contains(event.target)) stackDetails.open = false;
     });
+    stackDetails.addEventListener("mouseenter", () => {
+      stackDetails.open = true;
+    });
+    stackDetails.addEventListener("mouseleave", () => {
+      if (!stackDetails.matches(":focus-within")) stackDetails.open = false;
+    });
     stackDetails.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         stackDetails.open = false;
