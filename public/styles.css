@@ -268,17 +268,16 @@ input::placeholder { color: var(--kumo-text-placeholder); }
   display: flex;
   margin-top: 10px;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: center;
 }
 
-.field-help, .privacy-note {
+.privacy-note {
   margin: 0;
   color: var(--kumo-text-subtle);
   font-size: var(--kumo-text-xs);
+  text-align: center;
 }
 
-.privacy-note { text-align: right; }
 .turnstile { min-height: 0; }
 .turnstile-error { margin: 10px 0 0; color: var(--kumo-text-danger); font-size: var(--kumo-text-sm); }
 
@@ -487,8 +486,6 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
   input { height: 46px; font-size: var(--kumo-text-base); }
   #submit-button { min-width: 48px; width: 48px; height: 46px; padding: 0; }
   #submit-button .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-  .support-row { flex-direction: column; gap: 4px; }
-  .privacy-note { text-align: left; }
   .result { margin-top: 48px; }
   .result__header { gap: 12px; }
   h2 { font-size: 20px; }
