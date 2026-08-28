@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="YT;DW turns captioned YouTube videos into concise reading briefs.">
+  <meta name="description" content="YT;DW turns long YouTube videos into concise reading briefs.">
   <title>YT;DW | YouTube, Didn't Watch</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2318181b'/%3E%3Cpath d='M17.5 6 15 18h5l-6 8 2.5-7h-5l6-13Z' fill='%23f48120'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -97,22 +97,24 @@
       <div class="intro">
         <h1 id="page-title" class="wordmark wordmark--hero"><span>YT</span><span class="wordmark__semicolon">;</span><span>DW</span></h1>
         <p class="tagline">YouTube, Didn’t Watch.</p>
-        <p class="intro__copy">Paste a captioned video. Keep the useful parts.</p>
+        <p class="intro__copy">Long video. Short, useful brief.</p>
       </div>
 
       <form id="summary-form" class="composer">
         <label class="sr-only" for="youtube-url">YouTube URL</label>
         <div class="input-shell">
           <svg class="input-shell__play" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 6 6 4-6 4V6Z"/></svg>
-          <input id="youtube-url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="Paste a YouTube URL" required aria-describedby="url-help">
+          <input id="youtube-url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="Paste a YouTube URL" required aria-describedby="url-help privacy-note">
           <button id="submit-button" type="submit" disabled>
             <span class="button-label">Summarize</span>
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </div>
-        <p id="url-help" class="field-help">English captions · Videos up to six hours</p>
+        <div class="support-row">
+          <p id="url-help" class="field-help">Videos up to six hours</p>
+          <p id="privacy-note" class="privacy-note">Transcript deleted after processing.</p>
+        </div>
         <div id="turnstile-widget" class="turnstile"></div>
-        <p class="verification-note">Protected quietly by Turnstile</p>
         <p id="turnstile-error" class="turnstile-error" role="alert" hidden></p>
       </form>
 
@@ -147,7 +149,6 @@
   </main>
 
   <footer class="page-footer">
-    <span>Captions processed ephemerally</span>
     <details id="cloudflare-stack" class="cloudflare-stack">
       <summary><span class="cloudflare-dot" aria-hidden="true"></span>Powered by Cloudflare</summary>
       <div class="stack-popover">
