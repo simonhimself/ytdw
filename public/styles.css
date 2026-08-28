@@ -468,6 +468,7 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 .stack-popover dl > div { display: grid; grid-template-columns: 96px 1fr; gap: 10px; padding: 8px 0; border-top: 1px solid var(--kumo-hairline); }
 .stack-popover dt { color: var(--kumo-text-default); font-weight: 600; }
 .stack-popover dd { margin: 0; }
+.stack-popover code { font-family: var(--kumo-font-mono); font-size: 0.92em; }
 
 @keyframes settle {
   from { opacity: 0; transform: translateY(8px); }
