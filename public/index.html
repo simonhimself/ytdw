@@ -154,12 +154,12 @@
       <div class="stack-popover">
         <p class="stack-popover__title">Built on Cloudflare</p>
         <dl>
-          <div><dt>Workers</dt><dd>Serves the app and API at the edge.</dd></div>
-          <div><dt>Turnstile</dt><dd>Stops automated abuse without a CAPTCHA.</dd></div>
-          <div><dt>Sandbox</dt><dd>Retrieves public YouTube captions.</dd></div>
-          <div><dt>Durable Objects</dt><dd>Coordinates and deduplicates jobs.</dd></div>
-          <div><dt>Workers AI</dt><dd>Writes the brief with GLM 5.3.</dd></div>
-          <div><dt>Cache</dt><dd>Reuses completed briefs for 24 hours.</dd></div>
+          <div><dt>Workers</dt><dd>Routes the UI and JSON API at the edge.</dd></div>
+          <div><dt>Turnstile</dt><dd>Validates bot challenges before inference.</dd></div>
+          <div><dt>Sandbox</dt><dd>Runs <code>yt-dlp</code> in an isolated Linux container.</dd></div>
+          <div><dt>Durable Objects</dt><dd>Serializes extraction and coalesces duplicate jobs.</dd></div>
+          <div><dt>Workers AI</dt><dd>Summarizes full transcripts with GLM 5.3 Flash.</dd></div>
+          <div><dt>Cache</dt><dd>Keys briefs by video ID with a 24-hour TTL.</dd></div>
         </dl>
       </div>
     </details>
