@@ -201,9 +201,22 @@ button { color: inherit; }
   transform: translateY(-1px);
 }
 
+.input-shell input:focus {
+  outline: none;
+}
+
+.input-shell:focus-within .input-shell__play {
+  fill: var(--kumo-text-brand);
+}
+
 [data-mode="dark"] .input-shell {
   border-color: color-mix(in srgb, var(--kumo-brand) 28%, var(--kumo-hairline));
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--kumo-brand) 12%, transparent);
+}
+
+[data-mode="dark"] .input-shell:focus-within {
+  border-color: var(--kumo-brand);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--kumo-brand) 24%, transparent), 0 0 10px color-mix(in srgb, var(--kumo-brand) 18%, transparent);
 }
 
 .input-shell__play {
@@ -212,6 +225,7 @@ button { color: inherit; }
   margin-left: 12px;
   flex: 0 0 auto;
   fill: var(--kumo-text-subtle);
+  transition: fill 180ms ease;
 }
 
 input {
@@ -222,7 +236,6 @@ input {
   color: var(--kumo-text-default);
   background: transparent;
   border: 0;
-  outline: 0;
   font-size: var(--kumo-text-lg);
 }
 
@@ -251,13 +264,21 @@ input::placeholder { color: var(--kumo-text-placeholder); }
 #submit-button:disabled { opacity: 0.38; cursor: not-allowed; }
 #submit-button svg { width: 18px; height: 18px; }
 
-.field-help, .verification-note {
+.support-row {
+  display: flex;
+  margin-top: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.field-help, .privacy-note {
+  margin: 0;
   color: var(--kumo-text-subtle);
   font-size: var(--kumo-text-xs);
 }
 
-.field-help { margin: 10px 0 0; }
-.verification-note { position: absolute; top: 74px; right: 0; margin: 0; }
+.privacy-note { text-align: right; }
 .turnstile { min-height: 0; }
 .turnstile-error { margin: 10px 0 0; color: var(--kumo-text-danger); font-size: var(--kumo-text-sm); }
 
@@ -399,7 +420,7 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
   margin: 0 auto;
   padding: 14px 0;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 20px;
   color: var(--kumo-text-subtle);
   font-size: var(--kumo-text-xs);
@@ -465,7 +486,8 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
   input { height: 46px; font-size: var(--kumo-text-base); }
   #submit-button { min-width: 48px; width: 48px; height: 46px; padding: 0; }
   #submit-button .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-  .verification-note { display: none; }
+  .support-row { flex-direction: column; gap: 4px; }
+  .privacy-note { text-align: left; }
   .result { margin-top: 48px; }
   .result__header { gap: 12px; }
   h2 { font-size: 20px; }
