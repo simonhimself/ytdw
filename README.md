@@ -16,7 +16,8 @@ YT;DW turns captioned YouTube videos into concise reading briefs. Paste a video 
 
 ## Sharing
 
-After generating a brief, select **Copy share link**. Anyone with the link can
+After generating a brief, select **Share** to copy its link and reveal the expiry
+notice. Anyone with the link can
 read the same result, open the original YouTube video, and forward the link.
 The shared view requires no verification or additional AI generation.
 

@@ -148,10 +148,10 @@
           </div>
           <div class="result__actions">
             <button id="copy-button" class="copy-button" type="button">Copy</button>
-            <button id="share-button" class="copy-button" type="button" disabled>Copy share link</button>
+            <button id="share-button" class="copy-button" type="button" disabled>Share</button>
           </div>
         </header>
-        <p id="share-expiry" class="share-note"></p>
+        <p id="share-expiry" class="share-note" hidden></p>
         <p id="share-status" class="share-note" role="status"></p>
         <div id="share-fallback" hidden>
           <label for="share-url">Copy this link to share the brief</label>
@@ -326,7 +326,10 @@
       currentShare = data.share;
       shareButton.disabled = !currentShare;
       shareStatus.textContent = "";
+      shareStatus.classList.remove("sr-only");
       document.getElementById("share-fallback").hidden = true;
+      // Reset for each result; reveal the link's lifetime only when sharing is requested.
+      document.getElementById("share-expiry").hidden = Boolean(currentShare);
       document.getElementById("share-expiry").textContent = currentShare
         ? `Share link available until ${new Date(currentShare.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Anyone with the link can read and forward it.`
         : "Sharing is temporarily unavailable. You can still copy this brief.";
@@ -428,15 +431,21 @@
 
     shareButton.addEventListener("click", async () => {
       if (!currentShare) return;
+      document.getElementById("share-expiry").hidden = false;
+      shareStatus.textContent = "";
       // The server owns expiration; a recipient's clock must not block forwarding.
       const share = currentShare;
       const url = new URL(share.url, location.origin).href;
       try {
         await navigator.clipboard.writeText(url);
         if (currentShare !== share) return;
+        // Keep copy confirmation available to screen readers without a second visible line.
+        shareStatus.classList.add("sr-only");
         shareStatus.textContent = "Share link copied.";
+        document.getElementById("share-fallback").hidden = true;
       } catch {
         if (currentShare !== share) return;
+        shareStatus.classList.remove("sr-only");
         document.getElementById("share-fallback").hidden = false;
         const input = document.getElementById("share-url");
         input.value = url;
