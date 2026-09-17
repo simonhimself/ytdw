@@ -89,6 +89,12 @@ checks for this release follow the table.
   and expiration on September 18. Generation took several minutes.
 - Clicking Copy share link revealed the selectable URL fallback because the
   embedded browser denied clipboard access. The browser tool does not expose
-  input values, so opening that newly generated URL in a second browser was not
-  completed. Valid-link reads and forwarding remain covered by local integration
-  checks rather than a completed production recipient test.
+  input values; the initial recipient test was completed subsequently using a
+  share URL supplied by the user.
+- Production recipient verification passed for share ID
+  `75aad086-16f5-47f3-a449-9a3fd1d2e878`: the browser displayed the All-In Podcast
+  brief “Brad Gerstner: No AI Bubble, Semis Eat the Nasdaq & AI's Take Off Problem,”
+  channel, duration, YouTube link, and Copy share link action without verification.
+- Independent unauthenticated HTTP reads returned 200, no-store/noindex, identical
+  summary content, the same forwarding URL, and unchanged expiry
+  `2026-09-18T09:15:49.295Z`. The source video ID was `PJrntzMA4iQ`.
