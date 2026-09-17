@@ -15,6 +15,11 @@ The original optional container checks are retained below for image maintenance.
 
 ## Tests
 
+Loading feedback: verify “Opening the video” → “Reading the captions” →
+“Finding the signal” at 4.5-second intervals, including each supporting line.
+Verify the status and screen-reader announcement clear when a request ends.
+Run in desktop/mobile Chromium with both light and dark themes.
+
 For the optional real-container health check:
 
 ```bash
@@ -110,3 +115,11 @@ Native iOS behavior and real screen-reader speech remain manual follow-up checks
 | M3 | Turnstile and AI | New widget secret validates; production backend rejects invalid tokens; a real browser challenge reaches the backend; Workers AI works in the destination account. |
 | M4 | Legacy transition | Old `/` redirects to the new origin and preserves query parameters. Old generation requests do no upstream work. Existing share reads still use old storage and expiry. |
 | M5 | Fresh generation/sharing | A new-account video produces a brief and a new-host share link, readable without verification in another context. |
+
+## Custom domain
+
+- `https://ytdw.fyi/` and `https://www.ytdw.fyi/` serve the app with valid TLS.
+- `/api/config` returns the current sitekey on both hosts and the workers.dev alias.
+- Widget domains and production hostname validation include the custom hosts.
+- The legacy homepage redirects to `https://ytdw.fyi/`; old share reads remain on
+  their original storage and keep their original expiry.

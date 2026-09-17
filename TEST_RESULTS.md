@@ -1,6 +1,14 @@
 # YT;DW Test Results
 
-Status: production migrated to `ytdw.simons.workers.dev`; live generation and
+## Restored loading sequence — September 17, 2026
+
+- Restored the original three loading messages and supporting text, advancing
+  every 4.5 seconds and holding the final message until completion.
+- All 48 local Chromium UI checks passed across desktop/mobile and light/dark
+  themes, including the timed sequence and clearing status after a failed request.
+- `npm run typecheck` and `git diff --check` passed before deployment.
+
+Status: production is live at `ytdw.fyi` on the `simonhimself` account; live generation and
 legacy-link preservation verified. The existing image was copied without a rebuild.
 Live failed-replacement and native assistive-technology checks remain manual follow-ups.
 
@@ -292,3 +300,20 @@ recorded below.
 - The source Worker, its share storage, secrets, and widget remain available for
   the transition. Nothing was deleted or scheduled for automatic deletion.
   Completed-result caches and share records were not copied into the destination.
+
+## Custom domain — September 17, 2026
+
+- Found the active `ytdw.fyi` zone in `simonhimself`; it had no existing DNS records.
+- Attached `ytdw.fyi` and `www.ytdw.fyi` to that account's existing `ytdw` Worker.
+  Cloudflare configured DNS/TLS. Both HTTPS homepages and `/api/config` returned
+  200 with the correct app and sitekey; `ytdw.simons.workers.dev` remains enabled.
+- Updated the existing Managed Turnstile widget to allow the custom hostnames;
+  verified the widget secret was unchanged. Updated production hostname validation
+  to the two custom hosts plus the workers.dev alias.
+- Main-account deployment: `59020480-7c8f-406b-adf6-097137339eb8`.
+- Legacy-only deployment: `35f9846d-6f0f-4c40-9745-6fc7ea5fd4e8`. Verified the old
+  homepage redirects directly to `https://ytdw.fyi/` and the existing legacy share
+  API still returns 200. The main app remains in `simonhimself`.
+- Eleven backend tests and type checking passed. A new live summary was not
+  generated solely for this hostname change; the configured domains and HTTPS/API
+  availability were checked directly.

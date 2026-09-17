@@ -89,7 +89,7 @@ export default { async fetch(request, env) {
   const limit = name => ({limit:async()=>{counts.limits[name]=(counts.limits[name]||0)+1;return {success:limited!==name};}});
   const namespace = env.COORDINATOR;
   return worker.fetch(request, {...env,
-    MIGRATION_TARGET: legacy ? 'https://ytdw.simons.workers.dev' : undefined,
+    MIGRATION_TARGET: legacy ? 'https://ytdw.fyi' : undefined,
     REQUEST_RATE_LIMIT:limit('request'),CLIENT_RATE_LIMIT:limit('client'),GLOBAL_RATE_LIMIT:limit('global'),
     SHARE_READ_RATE_LIMIT:limit('share-client'),SHARE_GLOBAL_RATE_LIMIT:limit('share-global'),
     COORDINATOR:{idFromName:()=>scope,get:()=>namespace.getByName(scope)},Sandbox:{exec},

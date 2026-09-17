@@ -3,7 +3,7 @@
 ## Project
 
 YT;DW turns captioned YouTube videos into concise reading briefs. The production
-application is available at `https://ytdw.simons.workers.dev/`.
+application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 
 ## Architecture
 
@@ -63,7 +63,8 @@ npx wrangler deploy --profile default --containers-rollout=none
 
 The main config pins the `simonhimself` account and the existing image by digest.
 Legacy maintenance uses `--profile ssteiner --config wrangler.legacy.jsonc`.
-Verify `https://ytdw.simons.workers.dev/` after deployment.
+Verify `https://ytdw.fyi/` after deployment. `www.ytdw.fyi` and
+`ytdw.simons.workers.dev` remain supported aliases on the same Worker.
 
 ## Conventions
 

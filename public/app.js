@@ -16,6 +16,12 @@
   let submittedUrl = "";
   let widgetId;
   let verificationTimer;
+  let processingTimer;
+  const processingSteps = [
+    ["Opening the video", "Starting a secure media worker"],
+    ["Reading the captions", "Separating dialogue from timing data"],
+    ["Finding the signal", "Distilling claims, facts, and conclusions"]
+  ];
   let copyInFlight = null;
   let shareInFlight = null;
 
@@ -32,6 +38,7 @@
   }
 
   function setPhase(next) {
+    clearInterval(processingTimer);
     phase = next;
     if (next !== "verifying") clearTimeout(verificationTimer);
     form.setAttribute("aria-busy", String(next !== "idle"));
@@ -39,7 +46,15 @@
     submitButton.querySelector(".button-label").textContent = next === "idle" ? "Summarize" : next === "verifying" ? "Verifying" : "Working";
     byId("previous-result-note").hidden = !currentResult || next === "idle";
     if (next === "verifying") showStatus("Verifying…", "Complete the verification if prompted. Your video URL is saved for this request.");
-    if (next === "processing") showStatus("Preparing your brief…", "Waiting for a processing slot, reading captions, and creating the summary. This can take a few minutes.");
+    if (next === "processing") {
+      // These timed messages describe the workflow, not backend-reported progress.
+      let step = 0;
+      showStatus(...processingSteps[step]);
+      processingTimer = setInterval(() => {
+        showStatus(...processingSteps[++step]);
+        if (step === processingSteps.length - 1) clearInterval(processingTimer);
+      }, 4500);
+    }
     if (next === "idle") {
       status.hidden = true;
       byId("process-announcement").textContent = "";

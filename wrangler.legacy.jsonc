@@ -8,7 +8,7 @@
   "vars": {
     "TURNSTILE_SITEKEY": "0x4AAAAAAEeANLj7coT90tAS",
     "TURNSTILE_HOSTNAMES": "ytdw.ssteiner.workers.dev",
-    "MIGRATION_TARGET": "https://ytdw.simons.workers.dev"
+    "MIGRATION_TARGET": "https://ytdw.fyi"
   },
   "ai": { "binding": "AI" },
   "ratelimits": [

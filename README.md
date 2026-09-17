@@ -2,7 +2,7 @@
 
 YT;DW turns captioned YouTube videos into concise reading briefs. Paste a video URL, complete a quiet Turnstile check, and keep the useful parts without watching the whole video.
 
-[Open YT;DW](https://ytdw.simons.workers.dev/)
+[Open YT;DW](https://ytdw.fyi/)
 
 ## Stack
 
@@ -70,6 +70,12 @@ retired so extraction cannot bypass the coordinated queue.
 `wrangler.jsonc` pins the `simonhimself` account and the copied image's immutable
 registry digest. The image is byte-for-byte identical to the original; it was
 transferred directly between Cloudflare registries without rebuilding it.
+
+The primary address is `https://ytdw.fyi/`; `www.ytdw.fyi` serves the same Worker.
+Cloudflare manages their DNS and HTTPS certificates. The `ytdw.simons.workers.dev`
+address stays enabled for existing links. Turnstile and the server's hostname
+allowlist cover all three production hostnames; local hosts are not accepted by
+production Siteverify validation.
 
 ### Legacy URL transition
 

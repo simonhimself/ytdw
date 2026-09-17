@@ -92,16 +92,23 @@ test('previous brief remains readable and copyable during a failed replacement',
   await page.route('**/api/summarize', async route => { await gate; await route.fulfill({ status: 503, json: { error: 'The processing queue is full. Please try again.' } }); });
   await page.getByLabel('YouTube URL', { exact: true }).fill(videoB);
   await page.getByRole('button', { name: 'Summarize', exact: true }).click();
-  await expect(page.locator('#status-title')).toHaveText('Preparing your brief…');
+  await expect(page.locator('#status-title')).toHaveText('Opening the video');
+  await expect(page.locator('#status-detail')).toHaveText('Starting a secure media worker');
   await expect(page.locator('#previous-result-note')).toBeVisible();
   await expect(page.locator('#result-title')).toHaveText('First video brief');
   await page.getByRole('button', { name: 'Copy', exact: true }).click();
   expect(await page.evaluate(() => window.__copies.at(-1))).toBe(markdown);
+  await expect(page.locator('#status-title')).toHaveText('Reading the captions', { timeout: 6000 });
+  await expect(page.locator('#status-detail')).toHaveText('Separating dialogue from timing data');
+  await expect(page.locator('#status-title')).toHaveText('Finding the signal', { timeout: 6000 });
+  await expect(page.locator('#status-detail')).toHaveText('Distilling claims, facts, and conclusions');
   release();
   await expect(page.locator('#error')).toContainText('queue is full');
   await expect(page.locator('#result')).toBeVisible();
   await expect(page.locator('#result-title')).toHaveText('First video brief');
   await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeEnabled();
+  await expect(page.locator('#status')).toBeHidden();
+  await expect(page.locator('#process-announcement')).toBeEmpty();
 });
 
 test('verification guards duplicate submissions and preserves the initiating URL', async ({ page }) => {
@@ -225,10 +232,10 @@ test('verification failure can be retried and late expiry cannot cancel processi
   await page.route('**/api/summarize', async route => { await gate; await route.fulfill({ json: makeBrief() }); });
   await page.evaluate(() => { window.__autoVerify = true; });
   await page.getByRole('button', { name: 'Summarize', exact: true }).click();
-  await expect(page.locator('#status-title')).toHaveText('Preparing your brief…');
+  await expect(page.locator('#status-title')).toHaveText('Opening the video');
   await page.evaluate(() => window.__verification['expired-callback']());
   await expect(page.locator('#submit-button')).toBeDisabled();
-  await expect(page.locator('#status-title')).toHaveText('Preparing your brief…');
+  await expect(page.locator('#status-title')).toHaveText('Opening the video');
   release();
   await expect(page.locator('#result-title')).toHaveText('First video brief');
 });
