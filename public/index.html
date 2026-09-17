@@ -9,85 +9,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script>
-    try {
-      document.documentElement.dataset.mode = localStorage.getItem("ytdw-theme") === "dark" ? "dark" : "light";
-    } catch {
-      document.documentElement.dataset.mode = "light";
-    }
-  </script>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
-  <script>
-    const isSharedView = location.pathname.startsWith("/s/");
-    if (isSharedView) document.documentElement.dataset.view = "shared";
-    let turnstileWidgetId;
-    let turnstileToken = "";
-    let pendingSubmit = false;
-    function setSubmitState() {
-      const button = document.getElementById("submit-button");
-      const input = document.getElementById("youtube-url");
-      if (button && input) button.disabled = !input.validity.valid || button.dataset.busy === "true";
-    }
-    function showTurnstileError(message) {
-      const error = document.getElementById("turnstile-error");
-      if (!error) return;
-      error.textContent = message;
-      error.hidden = !message;
-    }
-    function onTurnstileLoad() {
-      turnstileWidgetId = turnstile.render("#turnstile-widget", {
-        sitekey: "0x4AAAAAAEeANLj7coT90tAS",
-        action: "summarize",
-        execution: "execute",
-        appearance: "interaction-only",
-        callback(token) {
-          turnstileToken = token;
-          showTurnstileError("");
-          setSubmitState();
-          if (pendingSubmit) {
-            pendingSubmit = false;
-            document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
-            document.getElementById("summary-form").requestSubmit();
-          }
-        },
-        "expired-callback"() {
-          turnstileToken = "";
-          pendingSubmit = false;
-          document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
-          showTurnstileError("Verification expired. Please complete it again.");
-          setSubmitState();
-        },
-        "error-callback"() {
-          turnstileToken = "";
-          pendingSubmit = false;
-          document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
-          showTurnstileError("Verification could not load. Check your connection and retry.");
-          setSubmitState();
-        },
-        "timeout-callback"() {
-          turnstileToken = "";
-          pendingSubmit = false;
-          document.getElementById("submit-button").querySelector(".button-label").textContent = "Summarize";
-          showTurnstileError("Verification timed out. Please try again.");
-          setSubmitState();
-        }
-      });
-    }
-  </script>
-  <script>
-    if (!isSharedView) {
-      const script = document.createElement("script");
-      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
-      script.defer = true;
-      // Load only after the widget container exists, including with a warm script cache.
-      window.addEventListener("DOMContentLoaded", () => document.head.append(script));
-      window.setTimeout(() => {
-        if (typeof window.turnstile === "undefined") {
-          showTurnstileError("Verification is blocked or unavailable. Allow challenges.cloudflare.com and reload.");
-        }
-      }, 8000);
-    }
-  </script>
+  <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="app-header">
@@ -112,7 +36,7 @@
         <label class="sr-only" for="youtube-url">YouTube URL</label>
         <div class="input-shell">
           <svg class="input-shell__play" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 6 6 4-6 4V6Z"/></svg>
-          <input id="youtube-url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="Paste a YouTube URL" required aria-describedby="privacy-note">
+          <input id="youtube-url" name="url" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="Paste a YouTube URL" required aria-describedby="privacy-note">
           <button id="submit-button" type="submit" disabled>
             <span class="button-label">Summarize</span>
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -126,11 +50,12 @@
       </form>
       <a class="shared-home result-link" href="/">Summarize another video &rarr;</a>
 
-      <div id="status" class="status" aria-live="polite" hidden>
+      <p id="process-announcement" class="sr-only" role="status" aria-atomic="true"></p>
+      <div id="status" class="status" hidden>
         <span class="status__semicolon" aria-hidden="true">;</span>
         <div>
-          <strong id="status-title">Opening the video</strong>
-          <span id="status-detail">Starting a secure media worker</span>
+          <strong id="status-title"></strong>
+          <span id="status-detail"></span>
         </div>
       </div>
 
@@ -140,6 +65,7 @@
       </div>
 
       <article id="result" class="result" tabindex="-1" hidden>
+        <p id="previous-result-note" class="share-note" hidden>Your previous brief stays available below.</p>
         <header class="result__header">
           <div>
             <p class="result__meta"><span id="result-channel"></span><span aria-hidden="true">·</span><span id="result-duration"></span></p>
@@ -152,7 +78,13 @@
           </div>
         </header>
         <p id="share-expiry" class="share-note" hidden></p>
-        <p id="share-status" class="share-note" role="status"></p>
+        <p id="copy-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
+        <div id="copy-fallback" hidden>
+          <label for="copy-text">Select and copy the brief</label>
+          <textarea id="copy-text" rows="8" readonly></textarea>
+        </div>
+        <p id="share-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
+        <a id="regenerate-link" class="result-link" hidden>Summarize this video again &rarr;</a>
         <div id="share-fallback" hidden>
           <label for="share-url">Copy this link to share the brief</label>
           <input id="share-url" type="url" readonly>
@@ -175,285 +107,13 @@
           <div><dt>Workers</dt><dd>Routes the UI and JSON API at the edge.</dd></div>
           <div><dt>Turnstile</dt><dd>Validates bot challenges before inference.</dd></div>
           <div><dt>Sandbox</dt><dd>Runs <code>yt-dlp</code> in an isolated Linux container.</dd></div>
-          <div><dt>Durable Objects</dt><dd>Serializes extraction and coalesces duplicate jobs.</dd></div>
+          <div><dt>Durable Objects</dt><dd>Bounds the processing queue, coalesces jobs, and stores briefs.</dd></div>
           <div><dt>Workers AI</dt><dd>Summarizes full transcripts with GLM 5.3 Flash.</dd></div>
-          <div><dt>Cache</dt><dd>Keys briefs by video ID with a 24-hour TTL.</dd></div>
+          <div><dt>Cache</dt><dd>Reuses completed briefs globally for 24 hours.</dd></div>
         </dl>
       </div>
     </details>
   </footer>
 
-  <script>
-    const form = document.getElementById("summary-form");
-    const submitButton = document.getElementById("submit-button");
-    const status = document.getElementById("status");
-    const statusTitle = document.getElementById("status-title");
-    const statusDetail = document.getElementById("status-detail");
-    const error = document.getElementById("error");
-    const errorMessage = document.getElementById("error-message");
-    const result = document.getElementById("result");
-    const themeToggle = document.getElementById("theme-toggle");
-    const stackDetails = document.getElementById("cloudflare-stack");
-    const shareButton = document.getElementById("share-button");
-    const shareStatus = document.getElementById("share-status");
-    let currentShare = null;
-    document.getElementById("youtube-url").addEventListener("input", setSubmitState);
-    const steps = [
-      ["Opening the video", "Starting a secure media worker"],
-      ["Reading the captions", "Separating dialogue from timing data"],
-      ["Finding the signal", "Distilling claims, facts, and conclusions"]
-    ];
-
-    function formatDuration(seconds) {
-      const minutes = Math.floor(seconds / 60);
-      const hours = Math.floor(minutes / 60);
-      const remaining = minutes % 60;
-      return hours ? `${hours}h ${remaining}m` : `${minutes} min`;
-    }
-
-    function setTheme(mode) {
-      document.documentElement.dataset.mode = mode;
-      themeToggle.setAttribute("aria-pressed", String(mode === "dark"));
-      themeToggle.setAttribute("aria-label", `Switch to ${mode === "dark" ? "light" : "dark"} mode`);
-    }
-
-    setTheme(document.documentElement.dataset.mode === "dark" ? "dark" : "light");
-    themeToggle.addEventListener("click", () => {
-      const mode = document.documentElement.dataset.mode === "dark" ? "light" : "dark";
-      setTheme(mode);
-      try { localStorage.setItem("ytdw-theme", mode); } catch {}
-    });
-
-    document.addEventListener("click", (event) => {
-      if (stackDetails.open && !stackDetails.contains(event.target)) stackDetails.open = false;
-    });
-    stackDetails.addEventListener("mouseenter", () => {
-      stackDetails.open = true;
-    });
-    stackDetails.addEventListener("mouseleave", () => {
-      if (!stackDetails.matches(":focus-within")) stackDetails.open = false;
-    });
-    stackDetails.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        stackDetails.open = false;
-        stackDetails.querySelector("summary").focus();
-      }
-    });
-
-    function appendInlineText(element, text) {
-      const parts = text.split(/(\*\*[^*]+\*\*)/g);
-      for (const part of parts) {
-        if (part.startsWith("**") && part.endsWith("**")) {
-          const strong = document.createElement("strong");
-          strong.textContent = part.slice(2, -2);
-          element.append(strong);
-        } else {
-          element.append(document.createTextNode(part));
-        }
-      }
-    }
-
-    function appendPointText(element, text) {
-      if (/^\*\*[^*]+\*\*/.test(text)) {
-        appendInlineText(element, text);
-        return;
-      }
-
-      const separator = text.search(/[:,;](?:\s|$)/);
-      const words = text.split(/\s+/);
-      const fallbackEnd = words.slice(0, Math.min(8, words.length)).join(" ").length;
-      const leadEnd = separator >= 12 && separator <= 180 ? separator : fallbackEnd;
-      const lead = text.slice(0, leadEnd).replace(/[.:;]+$/, "");
-      const detail = text.slice(leadEnd).replace(/^[:,;]?\s*/, "");
-      const strong = document.createElement("strong");
-      strong.textContent = `${lead}:`;
-      element.append(strong);
-      if (detail) element.append(document.createTextNode(` ${detail}`));
-    }
-
-    function renderSummary(markdown) {
-      const container = document.getElementById("result-summary");
-      container.replaceChildren();
-      let list = null;
-      let nextIndex = 1;
-      for (const rawLine of markdown.split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line) {
-          continue;
-        }
-        const heading = line.match(/^(#{1,4})\s+(.+)$/);
-        const topic = line.match(/^\*\*(.+?)\*\*:?$/);
-        const numberedItem = line.match(/^(\d+)[.)]\s+(.+)$/);
-        const bulletItem = line.match(/^[-*•]\s+(.+)$/);
-        const item = numberedItem || bulletItem;
-        let element;
-        if (heading) {
-          list = null;
-          element = document.createElement(heading[1].length >= 3 ? "h4" : "h3");
-          const headingText = /^overview$/i.test(heading[2]) ? "Summary" : heading[2];
-          appendInlineText(element, headingText);
-        } else if (topic) {
-          list = null;
-          element = document.createElement("h4");
-          appendInlineText(element, topic[1].replace(/:$/, ""));
-        } else if (item) {
-          if (!list) {
-            list = document.createElement("ol");
-            container.append(list);
-          }
-          element = document.createElement("li");
-          const index = numberedItem ? Number(numberedItem[1]) : nextIndex;
-          element.dataset.index = String(index).padStart(2, "0");
-          appendPointText(element, numberedItem ? numberedItem[2] : bulletItem[1]);
-          list.append(element);
-          nextIndex = index + 1;
-          continue;
-        } else {
-          list = null;
-          element = document.createElement("p");
-          appendInlineText(element, line);
-        }
-        container.append(element);
-      }
-    }
-
-    function showResult(data) {
-      document.getElementById("result-channel").textContent = data.uploader || "YouTube";
-      document.getElementById("result-title").textContent = data.title;
-      document.getElementById("result-duration").textContent = formatDuration(data.duration);
-      document.getElementById("video-link").href = `https://www.youtube.com/watch?v=${encodeURIComponent(data.id)}`;
-      document.getElementById("transcript-note").textContent = data.transcriptTruncated ? "Long transcript condensed" : "Full transcript processed";
-      currentShare = data.share;
-      shareButton.disabled = !currentShare;
-      shareStatus.textContent = "";
-      shareStatus.classList.remove("sr-only");
-      document.getElementById("share-fallback").hidden = true;
-      // Reset for each result; reveal the link's lifetime only when sharing is requested.
-      document.getElementById("share-expiry").hidden = Boolean(currentShare);
-      document.getElementById("share-expiry").textContent = currentShare
-        ? `Share link available until ${new Date(currentShare.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Anyone with the link can read and forward it.`
-        : "Sharing is temporarily unavailable. You can still copy this brief.";
-      renderSummary(data.summary);
-      document.body.classList.add("has-result");
-      result.hidden = false;
-      result.focus({ preventScroll: true });
-    }
-
-    async function loadSharedBrief() {
-      statusTitle.textContent = "Opening the shared brief";
-      statusDetail.textContent = "Loading the saved result";
-      status.hidden = false;
-      try {
-        const id = location.pathname.slice(3);
-        const response = await fetch(`/api/shares/${encodeURIComponent(id)}`, { cache: "no-store" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "The shared brief could not be loaded.");
-        showResult(data);
-        document.title = `${data.title} | YT;DW`;
-      } catch (requestError) {
-        error.querySelector("strong").textContent = "Shared brief unavailable";
-        errorMessage.textContent = requestError instanceof Error ? requestError.message : "Please try again.";
-        error.hidden = false;
-      } finally {
-        status.hidden = true;
-      }
-    }
-
-    if (isSharedView) loadSharedBrief();
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      if (!turnstileToken) {
-        if (!window.turnstile || turnstileWidgetId === undefined) {
-          showTurnstileError("Verification is not ready. Reload the page or allow challenges.cloudflare.com.");
-          return;
-        }
-        pendingSubmit = true;
-        submitButton.querySelector(".button-label").textContent = "Verifying";
-        turnstile.execute(turnstileWidgetId);
-        return;
-      }
-
-      submitButton.dataset.busy = "true";
-      submitButton.querySelector(".button-label").textContent = "Working";
-      document.body.classList.add("is-busy");
-      setSubmitState();
-      error.hidden = true;
-      result.hidden = true;
-      status.hidden = false;
-
-      let step = 0;
-      const stepTimer = setInterval(() => {
-        step = Math.min(step + 1, steps.length - 1);
-        [statusTitle.textContent, statusDetail.textContent] = steps[step];
-      }, 4500);
-
-      try {
-        const response = await fetch("/api/summarize", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            url: new FormData(form).get("url"),
-            turnstileToken
-          })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Unexpected response");
-
-        showResult(data);
-        const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        result.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
-      } catch (requestError) {
-        errorMessage.textContent = requestError instanceof Error ? requestError.message : "Please try again.";
-        error.hidden = false;
-      } finally {
-        clearInterval(stepTimer);
-        status.hidden = true;
-        document.body.classList.remove("is-busy");
-        submitButton.dataset.busy = "false";
-        submitButton.querySelector(".button-label").textContent = "Summarize";
-        turnstileToken = "";
-        if (window.turnstile && turnstileWidgetId !== undefined) turnstile.reset(turnstileWidgetId);
-        setSubmitState();
-      }
-    });
-
-    document.getElementById("copy-button").addEventListener("click", async (event) => {
-      const button = event.currentTarget;
-      try {
-        await navigator.clipboard.writeText(document.getElementById("result-summary").textContent);
-        button.textContent = "Copied";
-      } catch {
-        button.textContent = "Copy failed";
-      }
-      setTimeout(() => { button.textContent = "Copy"; }, 1400);
-    });
-
-    shareButton.addEventListener("click", async () => {
-      if (!currentShare) return;
-      document.getElementById("share-expiry").hidden = false;
-      shareStatus.textContent = "";
-      // The server owns expiration; a recipient's clock must not block forwarding.
-      const share = currentShare;
-      const url = new URL(share.url, location.origin).href;
-      try {
-        await navigator.clipboard.writeText(url);
-        if (currentShare !== share) return;
-        // Keep copy confirmation available to screen readers without a second visible line.
-        shareStatus.classList.add("sr-only");
-        shareStatus.textContent = "Share link copied.";
-        document.getElementById("share-fallback").hidden = true;
-      } catch {
-        if (currentShare !== share) return;
-        shareStatus.classList.remove("sr-only");
-        document.getElementById("share-fallback").hidden = false;
-        const input = document.getElementById("share-url");
-        input.value = url;
-        input.focus();
-        input.select();
-        shareStatus.textContent = "Select and copy the link below.";
-      }
-    });
-  </script>
 </body>
 </html>

@@ -2,19 +2,20 @@
 
 ## Goal
 
-Confirm that a Cloudflare Worker can invoke `yt-dlp` inside a Sandbox container
-during `wrangler dev`, retrieve public YouTube metadata, and extract English
-captions without downloading video.
+Validate the Worker/SQLite coordination and UI locally without live upstream
+calls, then smoke-test generation and sharing after an explicitly approved deploy.
+The original optional container checks are retained below for image maintenance.
 
 ## Preconditions
 
 - Node.js and npm are installed.
-- Docker is installed and the Docker daemon is running.
+- Docker is only required for the optional real-container checks, not `npm test`
+  or `npm run test:ui`.
 - The test URL is a public YouTube video that does not require authentication.
 
 ## Tests
 
-Set a public captioned test video before T6 and T7:
+For the optional real-container health check:
 
 ```bash
 export TEST_VIDEO_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -23,22 +24,21 @@ export TEST_TOKEN="local-test-token"
 
 | ID | Test | Command or action | Pass condition |
 | --- | --- | --- | --- |
-| T1 | Toolchain | `docker info`, `node --version`, `npx wrangler --version` | All commands exit successfully. |
+| T1 | Toolchain | `node --version`, `npx wrangler --version`; `docker info` only for image work | Required tools for the chosen checks are available. |
 | T2 | Static validation | `npm install`, `npm run cf-typegen`, `npm run typecheck` | Dependencies install and TypeScript compiles. |
-| T3 | Container build | `docker build -t ytdw .` | The image builds with Python, `yt-dlp`, Node.js, and FFmpeg. |
-| T4 | Binary smoke test | Run `docker run --rm --entrypoint bash ytdw -lc 'python3 --version && yt-dlp --version && node --version && ffmpeg -version \| head -n 1'`. | Each required binary is present. |
+| T3 | Optional container build | `docker build -t ytdw .` | The image builds with Python, `yt-dlp`, Node.js, and FFmpeg. Not required for this Worker/UI-only release. |
+| T4 | Optional binary smoke test | Run `docker run --rm --entrypoint bash ytdw -lc 'python3 --version && yt-dlp --version && node --version && ffmpeg -version \| head -n 1'`. | Each required binary is present. |
 | T5 | Wrangler health | Start `npm run dev -- --var TEST_TOKEN:local-test-token` in a separate terminal, then run `curl -fsS -H "Authorization: Bearer $TEST_TOKEN" http://127.0.0.1:8787/health`. | Response is `200` and lists all tool versions. |
-| T6 | Metadata extraction | Run `curl -fsS -H "Authorization: Bearer $TEST_TOKEN" --get --data-urlencode "url=$TEST_VIDEO_URL" http://127.0.0.1:8787/metadata`. | Response is `200` with video ID, title, and duration. |
-| T7 | Caption extraction | Run `curl -sS -D /tmp/yt-caption-headers.txt -H "Authorization: Bearer $TEST_TOKEN" --get --data-urlencode "url=$TEST_VIDEO_URL" http://127.0.0.1:8787/captions`. | Response is `200`, has `Content-Type: text/vtt`, and begins with `WEBVTT`. |
-| T8 | Input rejection | Run `curl -sS -o /tmp/yt-rejection.json -w '%{http_code}' -H "Authorization: Bearer $TEST_TOKEN" --get --data-urlencode 'url=https://example.com/video' http://127.0.0.1:8787/metadata`. | Response is `400`; code inspection confirms validation precedes `sandbox.exec()`. |
+| T6 | Retired metadata endpoint | Request `/metadata` even with a valid diagnostic token. | 404; no extraction outside the global queue. |
+| T7 | Retired caption endpoint | Request `/captions` even with a valid diagnostic token. | 404; no extraction outside the global queue. |
+| T8 | Input rejection | Send null/array JSON bodies or a non-YouTube URL to `/api/summarize`. | 400 before Siteverify or Sandbox execution. |
 
 ## Production Follow-up
 
-Local success does not validate YouTube access from Cloudflare data-center IPs.
-After local tests pass, protect a staging Worker with Cloudflare Access before
-repeating T5-T7. These endpoints can start expensive, long-running work and must
-not be public. Do not add account cookies unless their storage, rotation, and
-account-risk implications have been reviewed.
+Local tests do not validate YouTube access from Cloudflare data-center IPs.
+After an explicitly approved deployment, use the normal app to generate one
+captioned video and open its share URL. Confirm tokenless `/health` is rejected,
+shared reads need no verification, and the public errors remain helpful.
 
 ## Results
 
@@ -74,3 +74,28 @@ After deployment, repeat a real generation and share-link open in a second brows
 | C2 | Single-track extraction | Request exactly the selected English language with an anchored expression. No wildcard English downloads; no extraction command when no English track exists. |
 | C3 | YouTube rate limit | A yt-dlp HTTP 429 from metadata or caption extraction yields 503, a retry-later explanation, Retry-After, and no-store. Other failures and timeouts retain their existing responses. |
 | C4 | Result compatibility | Caption-selection metadata does not leak into summary results. Video/transcript size limits, sharing, and caching remain intact. |
+
+## Reliability and hardening suite
+
+Run `npm test` and `npm run test:ui`. The backend fixture runs production code and
+SQLite in workerd, with fake YouTube/AI/Turnstile and deterministic edge-limit
+decisions. Queue, processing, and recovery timers are shortened only in the test
+bundle. The browser suite serves the actual assets/CSP and simulates API/clipboard
+outcomes across desktop/mobile widths and light/dark themes.
+
+| ID | Check | Pass condition |
+| --- | --- | --- |
+| R1 | Early request guards | Invalid JSON/URLs and pre-limit rejections cause no Siteverify calls. Client-rejected requests do not consume the shared edge limit. |
+| R2 | Bounded queue and coalescing | Three distinct pending jobs maximum, duplicate jobs coalesce, overflow and stale waiters receive retry guidance without extra extraction. |
+| R3 | Authoritative admissions | At most five distinct generation jobs per rolling ten seconds in the coordinator; cached results remain readable. |
+| R4 | Global completed cache | Edge misses and runtime reload reuse the same stored result/expiry without more AI calls; expired records are not reused and alarms remove them. |
+| R5 | Deadlines and ambiguous execution | Non-cooperative startup is bounded; late commands check absolute deadlines before starting media work. RPC/reset failures retain a persisted barrier and do not start an immediate retry. |
+| R6 | Endpoint and header hardening | Share reads are limited before lookup, fixed expiry is preserved, diagnostic extraction is unavailable, authenticated health still works, and no-store/CSP/anti-framing headers cover API and share pages. |
+| U1 | Copy and fallback | Exact Markdown survives copying; denial shows selected text; success remains accessible without an extra visible line. |
+| U2 | Replacement and verification | Old brief remains usable on failure; malformed success cannot partially replace it; duplicate verification is blocked and the submitted URL is preserved. |
+| U3 | Async feedback and focus | Late callbacks cannot modify a replacement brief; successful actions retain keyboard focus and expired sharing focuses the recovery link. |
+| U4 | Share recovery | Server-confirmed expiry offers regeneration without auto-submission; recipients get actionable recovery instructions without loading Turnstile. |
+| U5 | Responsive preferences | Large landing logo, centered 28px result logo, 16px mobile inputs, and no horizontal overflow in both themes. |
+
+Npm audit covers the JavaScript dependency tree, not the existing container image.
+Native iOS behavior and real screen-reader speech remain manual follow-up checks.

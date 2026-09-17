@@ -1,6 +1,7 @@
 # YT;DW Test Results
 
-Status: Passed
+Status: historical deployed checks passed; current reliability/hardening changes
+pass local validation and are not deployed. Container image and migration unchanged.
 
 | ID | Status | Evidence |
 | --- | --- | --- |
@@ -173,3 +174,48 @@ checks for this release follow the table.
   `482e2b98-db03-49ae-88b7-017203862c7c` using the `ssteiner` profile and
   `--containers-rollout=none`. Verified production CSS contains the 28px
   result-state rule and retains the larger responsive landing-page rule.
+
+## Reliability and hardening — local, not deployed
+
+### Scope
+
+- Fixes apply to UI behavior, Worker coordination/cache/limits, browser headers,
+  and development-tool dependencies. The Sandbox SDK remains pinned to `0.12.1`
+  and `Dockerfile` is identical to the deployed version. No new image, GitHub
+  workflow, account migration, or production deployment was performed.
+- The draft container upgrade/build workflow was set aside outside the repository
+  after the user chose to keep the existing image. Container scans and package
+  refreshes are not claimed as part of this release.
+
+### Results
+
+- `npm run typecheck` and `git diff --check`: passed.
+- `npm test`: **10 passed**, exercising production routes and real SQLite Durable
+  Objects in local workerd, with mocked upstream services and shortened test timers.
+  Covered early limits/validation, client/shared limiter order, queue capacity and
+  waiter expiry, duplicate coalescing, global admissions, completed-cache expiry
+  and persistence, model timeouts, ambiguous reset recovery, uncooperative startup,
+  disabled extraction diagnostics, health authentication, share throttling and headers.
+- `npm run test:ui`: **48 passed** in Chromium at 1440×900 and 390×844, light and
+  dark. Covered Markdown copying, manual fallbacks, previous-result preservation,
+  verification state and captured URL, expiry/regeneration, keyboard focus, stale
+  callback isolation, malformed response preservation, and the requested logo sizes.
+  Upstream API/Turnstile responses and clipboard success/denial were simulated.
+- Inspected generated desktop-light and mobile-dark screenshots. These are real
+  browser layouts, unlike the earlier embedded browser's zero-width captures.
+- `npm audit`: **zero advisories** after updating Wrangler/its development tooling.
+  This does not scan the existing Linux container or prove third-party security.
+- Review identified timeout/reset cleanup and keyboard-focus gaps; fixes and
+  regression coverage were added. Both follow-up reviews found no remaining
+  blockers in those changes.
+- Wrangler's local `deploy --dry-run --profile ssteiner --containers-rollout=none`
+  bundle/configuration check passed. This did not upload or deploy a version.
+- Production YouTube/AI, native iOS clipboard,
+  and real assistive-technology speech were not exercised in this local pass.
+
+### Migration status
+
+The destination account's existing Workers subdomain was read-only verified as
+`simons.workers.dev`. Migration remains a separate next step after these fixes;
+no target Worker, secrets, Turnstile widget, registry/image, or container was created.
+Existing production and share URLs still use `ytdw.ssteiner.workers.dev`.

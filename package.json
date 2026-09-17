@@ -6,14 +6,19 @@
   "scripts": {
     "cf-typegen": "wrangler types",
     "dev": "wrangler dev",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/worker.test.mjs",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.12.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.10.1",
+    "esbuild": "^0.28.2",
+    "miniflare": "^5.20260917.0-alpha",
     "typescript": "^5.9.3",
-    "wrangler": "^4.102.0"
+    "wrangler": "^4.134.0"
   }
 }
