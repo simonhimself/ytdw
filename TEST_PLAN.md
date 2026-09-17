@@ -43,3 +43,25 @@ account-risk implications have been reviewed.
 ## Results
 
 Results are recorded in `TEST_RESULTS.md` after execution.
+
+## Brief sharing
+
+For local storage validation, use an isolated Miniflare fixture that imports the
+production Worker and `SharedBrief` class. Stub verification and the coordinator's
+completed result; keep the real share routes, SQLite storage, and static assets.
+Do not expose fixture seed/expiry endpoints in the production Worker.
+
+| ID | Test | Pass condition |
+| --- | --- | --- |
+| S1 | Fresh result and cache hit | Both return the displayed brief and a working UUID share URL. Separate successful requests get separate links with a full 24-hour lifetime. Share metadata is not cached with the summary. |
+| S2 | Open and forward repeatedly | Public reads return identical content and expiry without verification or generation. Copy share link forwards the existing URL. |
+| S3 | Persistence | Reload the Worker runtime and confirm the same link, content, and expiry survive. |
+| S4 | Expiration and cleanup | Set fixture expiry in the past without cleaning storage: reads return 404. Invoke the alarm handler and confirm storage is empty. |
+| S5 | Invalid links | Malformed and unknown IDs return 404 with an unavailable message, no-store, and noindex. The page offers a link home. |
+| S6 | Optional sharing failure | Reject snapshot creation: the summary still returns successfully with `share: null`. |
+| S7 | Shared UI | Desktop and mobile, light and dark: title/channel/duration, formatted brief, YouTube link, expiry, Copy, and Copy share link are readable without clipped controls. |
+| S8 | Clipboard and accessibility | Copy succeeds where clipboard permission is granted; when blocked, a labeled, selected, read-only URL is available. Native buttons/links support keyboard input. Incorrect client time does not block forwarding. |
+| S9 | Routing and response headers | `/s/:id` serves the UI shell and `/api/shares/:id` serves JSON without `TEST_TOKEN`. Shared responses use no-store/noindex; shared views do not load Turnstile. |
+
+Run `npm run cf-typegen`, `npm run typecheck`, and `git diff --check`.
+After deployment, repeat a real generation and share-link open in a second browser.

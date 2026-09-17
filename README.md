@@ -12,6 +12,18 @@ YT;DW turns captioned YouTube videos into concise reading briefs. Paste a video 
 - Workers AI generates structured briefs with GLM 5.3 Flash.
 - Turnstile and rate limits protect the public endpoint.
 - Cache API reuses completed briefs for 24 hours.
+- Per-link Durable Objects store shareable brief snapshots for a fixed 24 hours.
+
+## Sharing
+
+After generating a brief, select **Copy share link**. Anyone with the link can
+read the same result, open the original YouTube video, and forward the link.
+The shared view requires no verification or additional AI generation.
+
+Links expire 24 hours after their snapshot is created, including for cached
+results. Opening or forwarding a link does not extend its lifetime. Expiry is
+checked on the server and a Durable Object alarm clears the snapshot. Raw
+transcripts are still discarded after processing.
 
 ## Development
 
@@ -31,6 +43,17 @@ npx wrangler deploy
 ```
 
 The production Worker also requires `TURNSTILE_SECRET` and `TEST_TOKEN` secrets. Set them with `wrangler secret put`; never commit their values.
+
+### Recovery for the sharing release
+
+The sharing release adds the `SharedBrief` Durable Object in migration `v3`.
+Cloudflare does not allow a normal version rollback across this class migration.
+To restore the pre-sharing behavior, deploy the application logic and UI from
+commit `f40cb11`, while retaining the new `SharedBrief` export, its binding, and
+the migration history. Keep its alarm handler so existing snapshots are cleaned
+up. Do not remove or reverse the migration. Since the Sandbox image is unchanged,
+this recovery can use `npx wrangler deploy --containers-rollout=none` against the
+existing production Worker.
 
 ## Limits
 

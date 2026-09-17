@@ -32,7 +32,7 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/health", "/metadata", "/captions"]
+    "run_worker_first": ["/api/*", "/s/*", "/health", "/metadata", "/captions"]
   },
   "observability": {
     "enabled": true,
@@ -55,6 +55,10 @@
       {
         "class_name": "Coordinator",
         "name": "COORDINATOR"
+      },
+      {
+        "class_name": "SharedBrief",
+        "name": "SHARED_BRIEFS"
       }
     ]
   },
@@ -66,6 +70,10 @@
     {
       "new_sqlite_classes": ["Coordinator"],
       "tag": "v2"
+    },
+    {
+      "new_sqlite_classes": ["SharedBrief"],
+      "tag": "v3"
     }
   ]
 }

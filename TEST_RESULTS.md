@@ -44,3 +44,29 @@ coordination, rate limiting, and summary caching are enabled in production.
 - End-to-end: Turnstile completed in a browser and a cached 5h 15m video returned its full 16-point summary.
 - Responsive UI: desktop light and dark modes and the mobile result layout passed visual checks without horizontal overflow.
 - Accessibility: Lighthouse scored 100 for accessibility, best practices, SEO, and agentic browsing.
+
+## Brief sharing — September 17, 2026
+
+Local feature validation; this feature has not been deployed. Earlier production
+results above describe the existing application, not the new sharing routes.
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| S1 | Passed locally | Isolated Miniflare fixture exercised the production handler with a stubbed completed result on cache-miss and cache-hit paths. Both returned readable snapshots; repeated cached requests generated distinct links with 86,400,000 ms lifetimes. |
+| S2 | Passed locally | Repeated public reads and repeated internal create calls preserved the original expiry. The shared page exposes the same share URL to recipients. |
+| S3 | Passed locally | Replaced the fixture Worker module with a simulated deployment through `setOptions`; the existing stored brief and expiry survived runtime reload. |
+| S4 | Passed locally | Forced the stored expiry into the past while retaining the record: public reads returned 404. Calling the production alarm handler then emptied storage. |
+| S5 | Passed locally | Malformed and unknown UUIDs returned 404. Browser showed “This link has expired or is unavailable” and the home link. |
+| S6 | Passed locally | Injected a namespace failure; the summary remained intact and `share` was null. |
+| S7 | Passed locally | Browser checks at 1440×900 and 390×844 in light and dark modes; result actions fit, theme toggles worked, video metadata and YouTube link were visible. Inspected mobile-light and desktop-dark screenshots. |
+| S8 | Partial | Browser clipboard permission was denied; the fallback correctly revealed and selected the URL. Native controls and explicit label verified in source. Successful system clipboard writes and keyboard-only navigation were not exercised. Removed the client-clock expiry gate after review. |
+| S9 | Passed locally | Actual static-asset routing served the share shell with no-store/noindex; API reads worked without a diagnostic token. Shared UI skips Turnstile initialization. |
+
+- `npm run cf-typegen`, `npm run typecheck`, and `git diff --check` passed.
+- Two-axis source review completed: no blocking standards findings; client-clock
+  forwarding issue corrected and sharing documentation added.
+- Local fixture: `/var/folders/bv/9bz6lr4s1sd9hvy1r1q4vlz40000gn/T/opencode/ytdw-share-check.mjs`.
+  This temporary harness uses the installed Miniflare/esbuild packages and does
+  not add fixture routes to production source.
+- Real YouTube extraction, live Turnstile, and Workers AI were not rerun for this
+  feature. A production smoke test remains after deployment.

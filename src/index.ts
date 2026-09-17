@@ -14,6 +14,9 @@ const COMMAND_TIMEOUT = 120_000;
 const MAX_REQUEST_BYTES = 8_192;
 const MAX_VIDEO_SECONDS = 21_600;
 const MAX_TRANSCRIPT_CHARACTERS = 400_000;
+const SHARE_TTL_MS = 24 * 60 * 60 * 1000;
+const SHARE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SHARE_HEADERS = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" };
 
 class BadRequestError extends Error {}
 
@@ -35,6 +38,63 @@ interface TurnstileResult {
 interface SummaryResult extends VideoMetadata {
   summary: string;
   transcriptTruncated: boolean;
+}
+
+interface SharedBriefRecord {
+  version: 1;
+  result: SummaryResult;
+  createdAt: number;
+  expiresAt: number;
+}
+
+// Each link owns an immutable snapshot; reads never renew its lifetime.
+export class SharedBrief extends DurableObject<Env> {
+  async create(result: SummaryResult): Promise<number> {
+    return this.ctx.storage.transaction(async (storage) => {
+      const existing = await storage.get<SharedBriefRecord>("brief");
+      if (existing) return existing.expiresAt;
+      const createdAt = Date.now();
+      const expiresAt = createdAt + SHARE_TTL_MS;
+      await storage.put("brief", { version: 1, result, createdAt, expiresAt } satisfies SharedBriefRecord);
+      await storage.setAlarm(expiresAt);
+      return expiresAt;
+    });
+  }
+
+  async read(): Promise<SharedBriefRecord | null> {
+    const record = await this.ctx.storage.get<SharedBriefRecord>("brief");
+    // Alarms perform cleanup, but delayed cleanup must not extend public access.
+    return record && Date.now() < record.expiresAt ? record : null;
+  }
+
+  async alarm(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
+}
+
+async function withShare(result: SummaryResult, env: Env): Promise<Response> {
+  let share: { url: string; expiresAt: number } | null = null;
+  try {
+    const id = crypto.randomUUID();
+    const expiresAt = await env.SHARED_BRIEFS.getByName(id).create(result);
+    share = { url: `/s/${id}`, expiresAt };
+  } catch {
+    // A storage outage should not hide an otherwise successful brief.
+    console.error(JSON.stringify({ event: "share_creation_failed" }));
+  }
+  return Response.json({ ...result, share }, { headers: SHARE_HEADERS });
+}
+
+async function handleSharedBrief(id: string, env: Env): Promise<Response> {
+  try {
+    const record = SHARE_ID.test(id) ? await env.SHARED_BRIEFS.getByName(id).read() : null;
+    if (!record) {
+      return Response.json({ error: "This link has expired or is unavailable." }, { status: 404, headers: SHARE_HEADERS });
+    }
+    return Response.json({ ...record.result, share: { url: `/s/${id}`, expiresAt: record.expiresAt } }, { headers: SHARE_HEADERS });
+  } catch {
+    return Response.json({ error: "The shared brief could not be loaded. Please try again." }, { status: 503, headers: SHARE_HEADERS });
+  }
 }
 
 function normalizeYouTubeUrl(value: unknown): string {
@@ -340,14 +400,15 @@ async function handleSummarize(request: Request, env: Env): Promise<Response> {
   const videoId = new URL(videoUrl).searchParams.get("v")!;
   const cacheKey = new Request(`https://summary-cache.internal/v3/${videoId}`);
   const cached = await caches.default.match(cacheKey);
-  if (cached) return cached;
+  if (cached) return withShare(await cached.json<SummaryResult>(), env);
 
   const coordinator = env.COORDINATOR.get(env.COORDINATOR.idFromName("global"));
   const summary = await coordinator.summarize(videoUrl);
   const response = Response.json(summary);
   response.headers.set("cache-control", "public, max-age=86400");
   await caches.default.put(cacheKey, response.clone());
-  return response;
+  // Only the summary is cached: each successful request gets its own full 24 hours.
+  return withShare(summary, env);
 }
 
 async function summarizeVideo(videoUrl: string, env: Env): Promise<SummaryResult> {
@@ -453,6 +514,16 @@ export default {
     const requestUrl = new URL(request.url);
 
     try {
+      if (request.method === "GET" && requestUrl.pathname.startsWith("/api/shares/")) {
+        return handleSharedBrief(requestUrl.pathname.slice("/api/shares/".length), env);
+      }
+      if ((request.method === "GET" || request.method === "HEAD") && requestUrl.pathname.startsWith("/s/")) {
+        const shellUrl = new URL("/", request.url);
+        const shell = await env.ASSETS.fetch(new Request(shellUrl, { method: request.method }));
+        const response = new Response(shell.body, shell);
+        for (const [name, value] of Object.entries(SHARE_HEADERS)) response.headers.set(name, value);
+        return response;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/summarize") {
         return await handleSummarize(request, env);
       }
@@ -499,7 +570,7 @@ export default {
       const status = /timed?\s*out|timeout/i.test(message) ? 504 : 502;
       return Response.json(
         { error: status === 504 ? "The video took too long to process" : "The video could not be processed" },
-        { status },
+        { status, headers: requestUrl.pathname.startsWith("/s/") ? SHARE_HEADERS : undefined },
       );
     }
   },

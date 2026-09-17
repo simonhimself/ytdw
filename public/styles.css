@@ -373,6 +373,19 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 }
 
 .copy-button:hover { color: var(--kumo-text-default); background: var(--kumo-fill-hover); border-color: var(--kumo-fill); }
+.copy-button:disabled { opacity: 0.5; cursor: not-allowed; }
+.result__actions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.result-link { display: inline-block; margin-top: 12px; color: var(--kumo-text-default); text-underline-offset: 3px; }
+.share-note { margin: 12px 0 0; color: var(--kumo-text-subtle); font-size: var(--kumo-text-xs); }
+.share-note:empty { display: none; }
+#share-fallback { margin-top: 12px; }
+#share-url { margin-top: 6px; padding: 8px; border: 1px solid var(--kumo-hairline); border-radius: var(--kumo-radius-control); }
+.shared-home { display: none; }
+[data-view="shared"] .shared-home { display: inline-block; }
+[data-view="shared"] .composer { display: none; }
+[data-view="shared"] .workspace { padding-top: 40px; }
+[data-view="shared"] .intro { display: none; }
+[data-view="shared"] .result { margin-top: 32px; }
 
 .result__summary {
   padding: 32px 0 40px;
@@ -487,7 +500,7 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
   #submit-button { min-width: 48px; width: 48px; height: 46px; padding: 0; }
   #submit-button .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .result { margin-top: 48px; }
-  .result__header { gap: 12px; }
+  .result__header { gap: 16px; flex-direction: column; }
   h2 { font-size: 20px; }
   .result__summary { padding-top: 24px; }
   .result__footer { align-items: flex-start; flex-direction: column; gap: 3px; }

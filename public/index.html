@@ -18,6 +18,8 @@
   </script>
   <link rel="stylesheet" href="/styles.css">
   <script>
+    const isSharedView = location.pathname.startsWith("/s/");
+    if (isSharedView) document.documentElement.dataset.view = "shared";
     let turnstileWidgetId;
     let turnstileToken = "";
     let pendingSubmit = false;
@@ -72,13 +74,19 @@
       });
     }
   </script>
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit" async defer></script>
   <script>
-    window.setTimeout(() => {
-      if (typeof window.turnstile === "undefined") {
-        showTurnstileError("Verification is blocked or unavailable. Allow challenges.cloudflare.com and reload.");
-      }
-    }, 8000);
+    if (!isSharedView) {
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
+      script.defer = true;
+      // Load only after the widget container exists, including with a warm script cache.
+      window.addEventListener("DOMContentLoaded", () => document.head.append(script));
+      window.setTimeout(() => {
+        if (typeof window.turnstile === "undefined") {
+          showTurnstileError("Verification is blocked or unavailable. Allow challenges.cloudflare.com and reload.");
+        }
+      }, 8000);
+    }
   </script>
 </head>
 <body>
@@ -116,6 +124,7 @@
         <div id="turnstile-widget" class="turnstile"></div>
         <p id="turnstile-error" class="turnstile-error" role="alert" hidden></p>
       </form>
+      <a class="shared-home result-link" href="/">Summarize another video &rarr;</a>
 
       <div id="status" class="status" aria-live="polite" hidden>
         <span class="status__semicolon" aria-hidden="true">;</span>
@@ -135,9 +144,19 @@
           <div>
             <p class="result__meta"><span id="result-channel"></span><span aria-hidden="true">·</span><span id="result-duration"></span></p>
             <h2 id="result-title"></h2>
+            <a id="video-link" class="result-link" target="_blank" rel="noopener noreferrer">Watch on YouTube ↗</a>
           </div>
-          <button id="copy-button" class="copy-button" type="button">Copy</button>
+          <div class="result__actions">
+            <button id="copy-button" class="copy-button" type="button">Copy</button>
+            <button id="share-button" class="copy-button" type="button" disabled>Copy share link</button>
+          </div>
         </header>
+        <p id="share-expiry" class="share-note"></p>
+        <p id="share-status" class="share-note" role="status"></p>
+        <div id="share-fallback" hidden>
+          <label for="share-url">Copy this link to share the brief</label>
+          <input id="share-url" type="url" readonly>
+        </div>
         <div id="result-summary" class="result__summary"></div>
         <footer class="result__footer">
           <span>Generated from the video's captions</span>
@@ -175,6 +194,9 @@
     const result = document.getElementById("result");
     const themeToggle = document.getElementById("theme-toggle");
     const stackDetails = document.getElementById("cloudflare-stack");
+    const shareButton = document.getElementById("share-button");
+    const shareStatus = document.getElementById("share-status");
+    let currentShare = null;
     document.getElementById("youtube-url").addEventListener("input", setSubmitState);
     const steps = [
       ["Opening the video", "Starting a secure media worker"],
@@ -295,6 +317,47 @@
       }
     }
 
+    function showResult(data) {
+      document.getElementById("result-channel").textContent = data.uploader || "YouTube";
+      document.getElementById("result-title").textContent = data.title;
+      document.getElementById("result-duration").textContent = formatDuration(data.duration);
+      document.getElementById("video-link").href = `https://www.youtube.com/watch?v=${encodeURIComponent(data.id)}`;
+      document.getElementById("transcript-note").textContent = data.transcriptTruncated ? "Long transcript condensed" : "Full transcript processed";
+      currentShare = data.share;
+      shareButton.disabled = !currentShare;
+      shareStatus.textContent = "";
+      document.getElementById("share-fallback").hidden = true;
+      document.getElementById("share-expiry").textContent = currentShare
+        ? `Share link available until ${new Date(currentShare.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Anyone with the link can read and forward it.`
+        : "Sharing is temporarily unavailable. You can still copy this brief.";
+      renderSummary(data.summary);
+      document.body.classList.add("has-result");
+      result.hidden = false;
+      result.focus({ preventScroll: true });
+    }
+
+    async function loadSharedBrief() {
+      statusTitle.textContent = "Opening the shared brief";
+      statusDetail.textContent = "Loading the saved result";
+      status.hidden = false;
+      try {
+        const id = location.pathname.slice(3);
+        const response = await fetch(`/api/shares/${encodeURIComponent(id)}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "The shared brief could not be loaded.");
+        showResult(data);
+        document.title = `${data.title} | YT;DW`;
+      } catch (requestError) {
+        error.querySelector("strong").textContent = "Shared brief unavailable";
+        errorMessage.textContent = requestError instanceof Error ? requestError.message : "Please try again.";
+        error.hidden = false;
+      } finally {
+        status.hidden = true;
+      }
+    }
+
+    if (isSharedView) loadSharedBrief();
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!turnstileToken) {
@@ -334,14 +397,7 @@
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Unexpected response");
 
-        document.getElementById("result-channel").textContent = data.uploader || "YouTube";
-        document.getElementById("result-title").textContent = data.title;
-        document.getElementById("result-duration").textContent = formatDuration(data.duration);
-        document.getElementById("transcript-note").textContent = data.transcriptTruncated ? "Long transcript condensed" : "Full transcript processed";
-        renderSummary(data.summary);
-        document.body.classList.add("has-result");
-        result.hidden = false;
-        result.focus({ preventScroll: true });
+        showResult(data);
         const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         result.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
       } catch (requestError) {
@@ -360,13 +416,34 @@
     });
 
     document.getElementById("copy-button").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
       try {
         await navigator.clipboard.writeText(document.getElementById("result-summary").textContent);
-        event.currentTarget.textContent = "Copied";
+        button.textContent = "Copied";
       } catch {
-        event.currentTarget.textContent = "Copy failed";
+        button.textContent = "Copy failed";
       }
-      setTimeout(() => { event.currentTarget.textContent = "Copy"; }, 1400);
+      setTimeout(() => { button.textContent = "Copy"; }, 1400);
+    });
+
+    shareButton.addEventListener("click", async () => {
+      if (!currentShare) return;
+      // The server owns expiration; a recipient's clock must not block forwarding.
+      const share = currentShare;
+      const url = new URL(share.url, location.origin).href;
+      try {
+        await navigator.clipboard.writeText(url);
+        if (currentShare !== share) return;
+        shareStatus.textContent = "Share link copied.";
+      } catch {
+        if (currentShare !== share) return;
+        document.getElementById("share-fallback").hidden = false;
+        const input = document.getElementById("share-url");
+        input.value = url;
+        input.focus();
+        input.select();
+        shareStatus.textContent = "Select and copy the link below.";
+      }
     });
   </script>
 </body>
