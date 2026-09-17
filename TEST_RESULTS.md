@@ -1,5 +1,13 @@
 # YT;DW Test Results
 
+## Button-only verification — September 17, 2026
+
+- Restored verification feedback to the button; the loading block and logo pulse
+  start only after verification completes. Retained the screen-reader announcement.
+- All 48 Chromium UI checks passed across desktop/mobile and light/dark themes,
+  including hidden loading status during verification and the original timed sequence.
+- Type checking and diff checks passed during local pre-deployment validation.
+
 ## Restored loading sequence — September 17, 2026
 
 - Restored the original three loading messages and supporting text, advancing

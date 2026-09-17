@@ -117,7 +117,10 @@ test('verification guards duplicate submissions and preserves the initiating URL
   await page.evaluate(() => { window.__autoVerify = false; });
   await page.getByLabel('YouTube URL', { exact: true }).fill(videoA);
   await page.getByRole('button', { name: 'Summarize', exact: true }).click();
-  await expect(page.locator('#status-title')).toHaveText('Verifying…');
+  await expect(page.locator('#submit-button .button-label')).toHaveText('Verifying');
+  await expect(page.locator('#status')).toBeHidden();
+  await expect(page.locator('#process-announcement')).toHaveText('Verifying. Complete the verification if prompted.');
+  await expect(page.locator('body')).not.toHaveClass(/is-busy/);
   await expect(page.locator('#submit-button')).toBeDisabled();
   await expect(page.locator('#youtube-url')).toHaveAttribute('readonly', '');
   await page.evaluate(() => { document.querySelector('#summary-form').requestSubmit(); document.querySelector('#youtube-url').value = 'https://youtu.be/PJrntzMA4iQ'; });

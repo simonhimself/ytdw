@@ -17,6 +17,8 @@ The original optional container checks are retained below for image maintenance.
 
 Loading feedback: verify “Opening the video” → “Reading the captions” →
 “Finding the signal” at 4.5-second intervals, including each supporting line.
+During verification, only the button shows “Verifying”; the loading block stays
+hidden and the logo does not pulse. Screen readers receive a verification announcement.
 Verify the status and screen-reader announcement clear when a request ends.
 Run in desktop/mobile Chromium with both light and dark themes.
 

@@ -42,10 +42,14 @@
     phase = next;
     if (next !== "verifying") clearTimeout(verificationTimer);
     form.setAttribute("aria-busy", String(next !== "idle"));
-    document.body.classList.toggle("is-busy", next !== "idle");
+    document.body.classList.toggle("is-busy", next === "processing");
     submitButton.querySelector(".button-label").textContent = next === "idle" ? "Summarize" : next === "verifying" ? "Verifying" : "Working";
     byId("previous-result-note").hidden = !currentResult || next === "idle";
-    if (next === "verifying") showStatus("Verifying…", "Complete the verification if prompted. Your video URL is saved for this request.");
+    if (next === "verifying") {
+      // Keep verification feedback in the button so the loading block appears only during processing.
+      status.hidden = true;
+      byId("process-announcement").textContent = "Verifying. Complete the verification if prompted.";
+    }
     if (next === "processing") {
       // These timed messages describe the workflow, not backend-reported progress.
       let step = 0;
