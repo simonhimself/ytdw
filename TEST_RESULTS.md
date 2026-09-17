@@ -250,4 +250,6 @@ Existing production and share URLs still use `ytdw.ssteiner.workers.dev`.
 - Centered the widget container with flex layout. Browser geometry checks using
   a normal-size widget fixture passed at 1440px and 390px in light and dark modes.
 - All 48 browser tests, type checking, and `git diff --check` passed.
-- This CSS refinement is not yet deployed.
+- Deployed as version `d99e08b1-5516-4e00-b859-64f9fe08a0d0` using the existing
+  container. Production homepage returned 200 and the served stylesheet contained
+  the centered Turnstile rule.
