@@ -420,6 +420,7 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 }
 
 .has-result .workspace { padding-top: 40px; }
+.has-result .wordmark--hero { font-size: 28px; }
 .has-result .tagline, .has-result .intro__copy { display: none; }
 .has-result .composer { margin-top: 20px; }
 

@@ -161,3 +161,15 @@ checks for this release follow the table.
   live retry of the affected video, not just a mocked selection test.
 - A Sandbox alarm logged a deployment-related Durable Object reset; it did not
   prevent the successful summary request.
+
+### Compact centered result logo — local validation
+
+- Restored the result-state logo to 28px while retaining center alignment. The
+  larger landing-page logo rules are unchanged.
+- Local browser computed styles confirmed 28px and centered alignment in desktop/
+  light and mobile/dark configurations. The browser reported a zero-width page,
+  so this was a computed-style check rather than a full layout review.
+- `npm run typecheck` and `git diff --check` passed. Deployed as version
+  `482e2b98-db03-49ae-88b7-017203862c7c` using the `ssteiner` profile and
+  `--containers-rollout=none`. Verified production CSS contains the 28px
+  result-state rule and retains the larger responsive landing-page rule.
