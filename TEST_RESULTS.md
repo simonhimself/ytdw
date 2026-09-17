@@ -47,8 +47,8 @@ coordination, rate limiting, and summary caching are enabled in production.
 
 ## Brief sharing — September 17, 2026
 
-Local feature validation; this feature has not been deployed. Earlier production
-results above describe the existing application, not the new sharing routes.
+Local feature validation is recorded below. Deployment details and production
+checks for this release follow the table.
 
 | ID | Status | Evidence |
 | --- | --- | --- |
@@ -68,5 +68,27 @@ results above describe the existing application, not the new sharing routes.
 - Local fixture: `/var/folders/bv/9bz6lr4s1sd9hvy1r1q4vlz40000gn/T/opencode/ytdw-share-check.mjs`.
   This temporary harness uses the installed Miniflare/esbuild packages and does
   not add fixture routes to production source.
-- Real YouTube extraction, live Turnstile, and Workers AI were not rerun for this
-  feature. A production smoke test remains after deployment.
+- Live generation was subsequently exercised after deployment; see below.
+
+### Production deployment
+
+- Account verified: `Simon Steiner (CF)` (`224ecf06b47e8b9e86863aca7726c5eb`),
+  authenticated as `ssteiner@cloudflare.com` through the local `ssteiner` profile.
+  This profile is bound to the project directory; the default login remains separate.
+- Release commit: `43e4d2b` on `main`.
+- Previous version: `ad5ac8dd-25ee-49ff-ae7b-049f1971bf87`.
+- Deployed version: `8ad2a468-0667-44f1-a40f-ef9074691c4f`.
+- Deployed using `wrangler deploy --profile ssteiner --containers-rollout=none`,
+  explicitly targeting the verified account. The existing Sandbox image was reused.
+- Verified the new `SHARED_BRIEFS` binding and existing secrets in the deployed version.
+- Production HTTP checks: `/` returns 200; `/s/not-a-link` returns the UI shell
+  with no-store/noindex; `/api/shares/not-a-link` returns 404 and the expected
+  unavailable message with no-store/noindex.
+- Live Turnstile verification and generation succeeded for `dQw4w9WgXcQ`,
+  returning the Rick Astley brief, video link, enabled Copy share link button,
+  and expiration on September 18. Generation took several minutes.
+- Clicking Copy share link revealed the selectable URL fallback because the
+  embedded browser denied clipboard access. The browser tool does not expose
+  input values, so opening that newly generated URL in a second browser was not
+  completed. Valid-link reads and forwarding remain covered by local integration
+  checks rather than a completed production recipient test.
