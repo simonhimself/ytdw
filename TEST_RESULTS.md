@@ -148,5 +148,16 @@ checks for this release follow the table.
   download target, early no-English rejection, summary result shape, and metadata/
   caption rate-limit handling. Existing unrelated 502 and timeout 504 responses
   were also verified. Sandbox and AI calls were mocked for these checks.
-- `npm run typecheck` and `git diff --check` passed. This backend fix is not yet
-  deployed; successful extraction of the affected video remains unverified.
+- `npm run typecheck` and `git diff --check` passed.
+- Caption fix committed as `507a8f9`, pushed on `fix/english-caption-rate-limits`,
+  and fast-forward merged into `main`. The previously deployed UI refinements
+  were also committed as `8ec4c63`.
+- Deployed to production as version `c27bfaba-5aca-4bcc-98b3-c769a312fc92` using
+  the `ssteiner` profile and `--containers-rollout=none`.
+- Retried `38vwjWpHFes` through the production browser form. Logs confirmed
+  metadata extraction and caption download both exited with code 0, the
+  coordinator completed successfully, `/api/summarize` returned 200 in 42.34
+  seconds, and `SharedBrief.create` completed successfully. This is a successful
+  live retry of the affected video, not just a mocked selection test.
+- A Sandbox alarm logged a deployment-related Durable Object reset; it did not
+  prevent the successful summary request.
