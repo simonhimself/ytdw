@@ -2,7 +2,7 @@
 
 YT;DW turns captioned YouTube videos into concise reading briefs. Paste a video URL, complete a quiet Turnstile check, and keep the useful parts without watching the whole video.
 
-[Open YT;DW](https://ytdw.ssteiner.workers.dev/)
+[Open YT;DW](https://ytdw.simons.workers.dev/)
 
 ## Stack
 
@@ -57,7 +57,7 @@ before first paint. The UI gets its public Turnstile sitekey from `/api/config`.
 ## Deployment
 
 ```bash
-npx wrangler deploy --profile ssteiner --containers-rollout=none
+npx wrangler deploy --profile default --containers-rollout=none
 ```
 
 The production Worker also requires `TURNSTILE_SECRET` and `TEST_TOKEN` secrets. Set them with `wrangler secret put`; never commit their values.
@@ -67,10 +67,29 @@ workflow is needed for the current Worker/UI changes. `/health` remains protecte
 by `TEST_TOKEN`; the old `/metadata` and `/captions` execution endpoints are
 retired so extraction cannot bypass the coordinated queue.
 
-The requested move to the `simonhimself` account is a separate next step after
-validation. Its Workers subdomain is `simons.workers.dev`; do not change the
-active account or the live `ssteiner` app during this fix release. Existing share
-URLs must remain readable on their original hostname until they expire.
+`wrangler.jsonc` pins the `simonhimself` account and the copied image's immutable
+registry digest. The image is byte-for-byte identical to the original; it was
+transferred directly between Cloudflare registries without rebuilding it.
+
+### Legacy URL transition
+
+`wrangler.legacy.jsonc` preserves the original `ssteiner` account's bindings and
+share storage. With `MIGRATION_TARGET` set, the old homepage redirects to the new
+app (including a prefilled video URL), and old generation requests ask the visitor
+to reload. Existing `/s/...` links and their read API remain on the original
+hostname until their fixed expiration. They are not redirected to empty storage
+in the new account.
+
+For legacy-only maintenance, use:
+
+```bash
+npx wrangler deploy --profile ssteiner --config wrangler.legacy.jsonc --containers-rollout=none
+```
+
+Do not delete the old Worker or its Durable Object namespaces while valid links
+remain. The new account starts with a fresh summary cache; cached results and
+share snapshots were not bulk-copied. No automatic deletion of legacy resources
+is scheduled.
 
 ### Recovery for the sharing release
 

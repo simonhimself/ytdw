@@ -758,6 +758,20 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
     const requestUrl = new URL(request.url);
 
     try {
+      // Only the legacy account sets this. Keep its share routes on their
+      // original storage while sending new visitors to the migrated app.
+      const migrationTarget = (env as Env & { MIGRATION_TARGET?: string }).MIGRATION_TARGET;
+      if (migrationTarget) {
+        if ((request.method === "GET" || request.method === "HEAD") && requestUrl.pathname === "/") {
+          return new Response(null, {
+            status: 302,
+            headers: { location: new URL(`/${requestUrl.search}`, migrationTarget).href, "cache-control": "no-store" },
+          });
+        }
+        if (requestUrl.pathname === "/api/summarize") {
+          return Response.json({ error: "YT;DW has moved. Reload this page to open the new site." }, { status: 409, headers: SHARE_HEADERS });
+        }
+      }
       if (request.method === "GET" && requestUrl.pathname === "/api/config") {
         return Response.json({ turnstileSitekey: env.TURNSTILE_SITEKEY }, { headers: { "cache-control": "public, max-age=300" } });
       }

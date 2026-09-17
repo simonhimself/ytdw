@@ -3,7 +3,7 @@
 ## Project
 
 YT;DW turns captioned YouTube videos into concise reading briefs. The production
-application is available at `https://ytdw.ssteiner.workers.dev/`.
+application is available at `https://ytdw.simons.workers.dev/`.
 
 ## Architecture
 
@@ -14,6 +14,7 @@ application is available at `https://ytdw.ssteiner.workers.dev/`.
 - `public/styles.css` contains the Kumo-based light and dark themes.
 - `Dockerfile` defines the Sandbox image that runs `yt-dlp`.
 - `wrangler.jsonc` is the source of truth for Cloudflare bindings and deployment.
+- `wrangler.legacy.jsonc` maintains old-host redirects and existing share URLs.
 
 The Worker uses Cloudflare Workers, Sandbox, Durable Objects, Workers AI,
 Turnstile, rate limits, static assets, and the Cache API.
@@ -57,10 +58,12 @@ Deploy normally with `npx wrangler deploy`. If Docker is stopped and the
 container image is unchanged, deploy with:
 
 ```bash
-npx wrangler deploy --profile ssteiner --containers-rollout=none
+npx wrangler deploy --profile default --containers-rollout=none
 ```
 
-Verify `https://ytdw.ssteiner.workers.dev/` after deployment.
+The main config pins the `simonhimself` account and the existing image by digest.
+Legacy maintenance uses `--profile ssteiner --config wrangler.legacy.jsonc`.
+Verify `https://ytdw.simons.workers.dev/` after deployment.
 
 ## Conventions
 
@@ -73,5 +76,6 @@ Verify `https://ytdw.ssteiner.workers.dev/` after deployment.
 - Update `TEST_PLAN.md` and `TEST_RESULTS.md` when validation scope changes.
 - The existing Sandbox SDK/image remain at `0.12.1`; do not require a container
   rebuild or a CI pipeline for Worker/UI-only fixes.
-- Account migration to `simonhimself` is deferred until the fixes are validated;
-  preserve existing share links on their original hostname during any migration.
+- Preserve legacy share links at `ytdw.ssteiner.workers.dev` until their original
+  expiry. Never redirect `/s/*` to the new account or delete legacy storage without
+  explicit authorization.

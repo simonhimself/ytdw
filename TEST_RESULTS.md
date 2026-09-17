@@ -1,8 +1,8 @@
 # YT;DW Test Results
 
-Status: reliability/hardening changes deployed after passing local validation.
-Live clipboard, recipient sharing, and header checks passed; new-generation and
-replacement-failure smoke checks remain incomplete. Container image and account unchanged.
+Status: production migrated to `ytdw.simons.workers.dev`; live generation and
+legacy-link preservation verified. The existing image was copied without a rebuild.
+Live failed-replacement and native assistive-technology checks remain manual follow-ups.
 
 | ID | Status | Evidence |
 | --- | --- | --- |
@@ -238,12 +238,11 @@ checks for this release follow the table.
 - Local-only smoke script:
   `/var/folders/bv/9bz6lr4s1sd9hvy1r1q4vlz40000gn/T/opencode/ytdw-live-hardening-check.mjs`.
 
-### Migration status
+### Migration planning status at the hardening release
 
-The destination account's existing Workers subdomain was read-only verified as
-`simons.workers.dev`. Migration remains a separate next step after these fixes;
-no target Worker, secrets, Turnstile widget, registry/image, or container was created.
-Existing production and share URLs still use `ytdw.ssteiner.workers.dev`.
+At that release, the destination subdomain had only been read-only verified and
+production still used `ytdw.ssteiner.workers.dev`. The completed migration is
+recorded below.
 
 ### Centered Turnstile widget — local validation
 
@@ -253,3 +252,43 @@ Existing production and share URLs still use `ytdw.ssteiner.workers.dev`.
 - Deployed as version `d99e08b1-5516-4e00-b859-64f9fe08a0d0` using the existing
   container. Production homepage returned 200 and the served stylesheet contained
   the centered Turnstile rule.
+
+## Migration to simonhimself — September 17, 2026
+
+- New production URL: `https://ytdw.simons.workers.dev/`.
+- Destination account: `2423947c3898625c52d1d37070dffd03` (`simonhimself`).
+  The project's local Wrangler profile now resolves to the default login,
+  `simonhimself@gmail.com`; `ssteiner` remains available for legacy maintenance.
+- Main config pins the destination account; `wrangler.legacy.jsonc` pins the
+  source account and retains its original Durable Object namespaces.
+- **M1 passed:** copied OCI layers directly between account registries. Both
+  manifests match `sha256:dc66600b6b8c57db2861d769cf48fb5b9424642479f740883f55ac718cf721a5`.
+  No Docker installation, image rebuild, SDK change, or CI workflow was needed.
+- **M2 passed:** created destination Worker/bindings and container application
+  `a031ba34-c4e2-40a9-a863-9144cebf1f0e`. Stored `TURNSTILE_SECRET` and a fresh
+  diagnostic `TEST_TOKEN` directly in the Worker without printing their values.
+  Authenticated health returned 200 with Python 3.10.12, yt-dlp 2026.08.19,
+  Node 22.22.3, and FFmpeg 4.4.2.
+- **M3 passed for configured integration:** created Managed widget
+  `0x4AAAAAAE64yf1Lv7dzlttY` for the new hostname and local development hosts.
+  Production hostname validation accepts only `ytdw.simons.workers.dev`.
+  The widget-secret probe passed, invalid application tokens returned 403,
+  tokenless health returned 401, and a real browser verification reached generation.
+  Workers AI also completed a small direct model availability probe. Token replay
+  rejection was not separately exercised during the live migration.
+- **M5 generation and share-read checks passed:** after a setup-time Durable Object reset/cooldown, a retry for
+  `dQw4w9WgXcQ` produced a full brief on the new account. Share successfully checked
+  the new snapshot and displayed its expiry and manual URL-copy fallback. A real
+  new-account summary, not a fixture, was displayed in the browser. Opening that
+  particular new share in a separate recipient context was not exercised.
+- Destination deployment: `4a9dc4af-7f3f-48aa-bbcc-1ae3a20fb6c0`.
+- **M4 passed:** source deployment `6872e885-e348-4a89-bbfa-7f80280507d0` now
+  redirects the old homepage with HTTP 302 and preserves video query parameters.
+  Old generation requests return 409 with reload guidance instead of starting work.
+  Existing share HTML and read API remain HTTP 200 on the source account. The
+  known All-In share retained its exact expiry `2026-09-18T09:15:49.295Z`.
+- `npm test`: **11 passed**, including migration routing, preserved share access,
+  and rejection before upstream work. Type checking and diff checks passed.
+- The source Worker, its share storage, secrets, and widget remain available for
+  the transition. Nothing was deleted or scheduled for automatic deletion.
+  Completed-result caches and share records were not copied into the destination.

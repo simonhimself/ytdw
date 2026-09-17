@@ -100,3 +100,13 @@ outcomes across desktop/mobile widths and light/dark themes.
 
 Npm audit covers the JavaScript dependency tree, not the existing container image.
 Native iOS behavior and real screen-reader speech remain manual follow-up checks.
+
+## Account migration
+
+| ID | Check | Pass condition |
+| --- | --- | --- |
+| M1 | Image transfer | Source and destination manifests have the same SHA-256 digest; no rebuild or SDK change. |
+| M2 | Destination setup | Correct account, public hostname/sitekey, all bindings, and both secret names. Authenticated health executes tools from the copied image. |
+| M3 | Turnstile and AI | New widget secret validates; production backend rejects invalid tokens; a real browser challenge reaches the backend; Workers AI works in the destination account. |
+| M4 | Legacy transition | Old `/` redirects to the new origin and preserves query parameters. Old generation requests do no upstream work. Existing share reads still use old storage and expiry. |
+| M5 | Fresh generation/sharing | A new-account video produces a brief and a new-host share link, readable without verification in another context. |

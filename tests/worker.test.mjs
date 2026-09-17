@@ -177,3 +177,21 @@ test('share reads are rate-limited before lookup and retain fixed expiry and sec
   assert.equal(shell.headers.get('x-frame-options'), 'DENY');
   assert.equal(shell.headers.get('x-robots-tag'), 'noindex, nofollow');
 });
+
+test('legacy homepage redirects without moving share URLs or starting generation', async () => {
+  const response = await h.request('/__legacy/?url=https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ', {redirect:'manual'});
+  assert.equal(response.status,302);
+  assert.equal(response.headers.get('location'),'https://ytdw.simons.workers.dev/?url=https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ');
+  assert.equal(response.headers.get('cache-control'),'no-store');
+  const before = h.verifications();
+  const moved = await h.request('/__legacy/api/summarize',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:`https://youtu.be/${video(80)}`,turnstileToken:'fixture-token'})});
+  assert.equal(moved.status,409);
+  assert.match((await moved.json()).error,/Reload this page/);
+  assert.equal(h.verifications(),before);
+  const data = await (await h.post(video(81),'legacy-share')).json();
+  const id = data.share.url.split('/').pop();
+  const oldShare = await h.request(`/__legacy/api/shares/${id}`);
+  assert.equal(oldShare.status,200);
+  assert.equal((await oldShare.json()).share.expiresAt,data.share.expiresAt);
+  assert.equal((await h.request(`/__legacy/s/${id}`)).status,200);
+});

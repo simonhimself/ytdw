@@ -68,6 +68,11 @@ export class SharedBrief extends BaseSharedBrief {
 export default { async fetch(request, env) {
   const url = new URL(request.url);
   const scope = request.headers.get('x-test-scope') || 'global';
+  const legacy = url.pathname.startsWith('/__legacy');
+  if (legacy) {
+    url.pathname = url.pathname.slice('/__legacy'.length) || '/';
+    request = new Request(url, request);
+  }
   if (url.pathname === '/__control') {
     const {action,id} = await request.json();
     if (action === 'hold') held.add(id);
@@ -84,6 +89,7 @@ export default { async fetch(request, env) {
   const limit = name => ({limit:async()=>{counts.limits[name]=(counts.limits[name]||0)+1;return {success:limited!==name};}});
   const namespace = env.COORDINATOR;
   return worker.fetch(request, {...env,
+    MIGRATION_TARGET: legacy ? 'https://ytdw.simons.workers.dev' : undefined,
     REQUEST_RATE_LIMIT:limit('request'),CLIENT_RATE_LIMIT:limit('client'),GLOBAL_RATE_LIMIT:limit('global'),
     SHARE_READ_RATE_LIMIT:limit('share-client'),SHARE_GLOBAL_RATE_LIMIT:limit('share-global'),
     COORDINATOR:{idFromName:()=>scope,get:()=>namespace.getByName(scope)},Sandbox:{exec},
