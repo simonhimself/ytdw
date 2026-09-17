@@ -98,3 +98,55 @@ checks for this release follow the table.
 - Independent unauthenticated HTTP reads returned 200, no-store/noindex, identical
   summary content, the same forwarding URL, and unchanged expiry
   `2026-09-18T09:15:49.295Z`. The source video ID was `PJrntzMA4iQ`.
+
+### Share notice interaction refinement — local validation
+
+- Renamed the share action to **Share**; **Copy** remains unchanged.
+- The expiry notice starts hidden and is revealed only by Share. Each newly
+  displayed result resets the notice; link creation and expiration are unchanged.
+- Verified hidden-before/click-to-reveal behavior and clipboard fallback using
+  the local browser fixture in desktop/light and mobile/dark configurations.
+  Computed display changed from `none` to `block` as expected. The embedded browser
+  reported a zero-width document during these checks, so this validates behavior,
+  not a fresh responsive layout review.
+- Deployed as version `757d1252-5967-4fb4-87dc-ad3d0d3ce259` using the `ssteiner`
+  profile and `--containers-rollout=none`. Production browser verification on the
+  existing All-In share link confirmed the **Copy**/**Share** labels and the expiry
+  notice changing from `display: none` before Share to `display: block` afterward.
+
+### Result header and concise share feedback — local validation
+
+- Successful sharing now shows only the expiry notice visually; the copy-success
+  confirmation stays in the screen-reader live region. Clipboard failures still
+  show the selectable URL and instructions.
+- The generation page retains the centered hero logo at its landing-page size
+  after a result appears, rather than shrinking and left-aligning it.
+- Used a local UI fixture with simulated clipboard success/failure. Confirmed
+  success feedback uses the clipped 1px `sr-only` style and failure instructions
+  remain visible. No production clipboard permissions were changed.
+- Browser computed-style checks confirmed the logo centered at 64px on desktop
+  (1440px viewport) and 48px on mobile (390px viewport); checked light/dark themes.
+- Deployed as version `fcbd8120-75a1-4865-a688-9902c871455d` with the `ssteiner`
+  profile and the existing container image. Production HTML/CSS checks confirmed
+  the screen-reader-only success status and removal of result-state logo shrinking
+  and left alignment. The existing production share page still loaded its brief
+  and the Copy/Share actions. Clipboard success was tested with the local fixture,
+  since the embedded production browser denies clipboard access.
+
+### Video-specific caption failure — September 17, 2026
+
+- Reproduced failure for `38vwjWpHFes` on production. Metadata retrieval succeeded;
+  the caption subprocess failed with `Unable to download video subtitles for
+  'en-en-US': HTTP Error 429: Too Many Requests`. This preceded AI summarization.
+  The user confirmed other videos continued to work.
+- Prepared a local change to select one English caption track from metadata
+  instead of downloading every `en.*` variant. HTTP 429 now maps to an explicit
+  YouTube retry-later response instead of a generic processing failure.
+- C1–C4 passed in the isolated fixture
+  `/var/folders/bv/9bz6lr4s1sd9hvy1r1q4vlz40000gn/T/opencode/ytdw-captions-check.mjs`:
+  authored/automatic/regional selection, malformed and empty tracks, one exact
+  download target, early no-English rejection, summary result shape, and metadata/
+  caption rate-limit handling. Existing unrelated 502 and timeout 504 responses
+  were also verified. Sandbox and AI calls were mocked for these checks.
+- `npm run typecheck` and `git diff --check` passed. This backend fix is not yet
+  deployed; successful extraction of the affected video remains unverified.

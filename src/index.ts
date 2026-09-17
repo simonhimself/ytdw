@@ -29,6 +29,10 @@ interface VideoMetadata {
   uploader?: string;
 }
 
+interface ExtractedVideoMetadata extends VideoMetadata {
+  captionLanguage: string | null;
+}
+
 interface TurnstileResult {
   success: boolean;
   action?: string;
@@ -137,10 +141,27 @@ function decodeUrlCommand(encodedUrl: string): string {
   return `url=$(printf %s '${encodedUrl}' | base64 -d)`;
 }
 
+function selectEnglishCaptionLanguage(metadata: Record<string, unknown>): string | null {
+  // Prefer authored captions, then original English auto-captions. Download one
+  // track only: requesting en.* downloads every variant and can trigger throttling.
+  for (const captions of [metadata.subtitles, metadata.automatic_captions]) {
+    if (!captions || typeof captions !== "object" || Array.isArray(captions)) continue;
+    const languages = Object.entries(captions)
+      .filter(([language, formats]) => /^en(?:[-_][A-Za-z0-9]+)*$/.test(language) && Array.isArray(formats) && formats.length > 0)
+      .map(([language]) => language)
+      .sort();
+    for (const preferred of ["en-orig", "en"]) {
+      if (languages.includes(preferred)) return preferred;
+    }
+    if (languages.length) return languages[0];
+  }
+  return null;
+}
+
 async function extractMetadata(
   sandbox: SandboxInstance,
   videoUrl: string,
-): Promise<VideoMetadata> {
+): Promise<ExtractedVideoMetadata> {
   const encodedUrl = Buffer.from(videoUrl).toString("base64");
   const result = await sandbox.exec(
     `${decodeUrlCommand(encodedUrl)} && timeout --signal=TERM --kill-after=5s 110s yt-dlp --compat-options no-certifi --js-runtimes node --no-playlist --skip-download --dump-single-json "$url"`,
@@ -164,13 +185,18 @@ async function extractMetadata(
     title: metadata.title,
     duration: metadata.duration,
     uploader: typeof metadata.uploader === "string" ? metadata.uploader : undefined,
+    captionLanguage: selectEnglishCaptionLanguage(metadata),
   };
 }
 
 async function extractCaptions(
   sandbox: SandboxInstance,
   videoUrl: string,
+  captionLanguage: string | null,
 ): Promise<string> {
+  if (!captionLanguage || !/^en(?:[-_][A-Za-z0-9]+)*$/.test(captionLanguage)) {
+    throw new BadRequestError("This video has no English captions");
+  }
   const encodedUrl = Buffer.from(videoUrl).toString("base64");
   const outputDir = `/tmp/yt-captions-${crypto.randomUUID()}`;
   const result = await sandbox.exec(
@@ -179,7 +205,7 @@ async function extractCaptions(
       "trap 'rm -rf \"$output_dir\"' EXIT",
       `mkdir -p '${outputDir}'`,
       decodeUrlCommand(encodedUrl),
-      `timeout --signal=TERM --kill-after=5s 110s yt-dlp --compat-options no-certifi --js-runtimes node --quiet --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs --sub-langs 'en.*,en' --sub-format vtt --output '${outputDir}/%(id)s.%(ext)s' \"$url\"`,
+      `timeout --signal=TERM --kill-after=5s 110s yt-dlp --compat-options no-certifi --js-runtimes node --quiet --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs --sub-langs '^${captionLanguage}$' --sub-format vtt --output '${outputDir}/%(id)s.%(ext)s' \"$url\"`,
       `file=$(find '${outputDir}' -type f -name '*.vtt' | head -n 1)`,
       "if test -z \"$file\"; then exit 3; fi",
       "if test $(stat -c%s \"$file\") -gt 2097152; then exit 4; fi",
@@ -416,11 +442,11 @@ async function summarizeVideo(videoUrl: string, env: Env): Promise<SummaryResult
     enableDefaultSession: false,
     transport: "rpc",
   });
-  const metadata = await extractMetadata(sandbox, videoUrl);
+  const { captionLanguage, ...metadata } = await extractMetadata(sandbox, videoUrl);
   if (metadata.duration > MAX_VIDEO_SECONDS) {
     throw new BadRequestError("Videos longer than six hours are not supported");
   }
-  const captions = await extractCaptions(sandbox, videoUrl);
+  const captions = await extractCaptions(sandbox, videoUrl, captionLanguage);
   const transcript = fitTranscript(captionsToText(captions));
   if (!transcript.text) throw new BadRequestError("The captions were empty");
 
@@ -554,7 +580,9 @@ export default {
       }
 
       if (requestUrl.pathname === "/captions") {
-        return new Response(await extractCaptions(sandbox, getYouTubeUrl(requestUrl)), {
+        const videoUrl = getYouTubeUrl(requestUrl);
+        const { captionLanguage } = await extractMetadata(sandbox, videoUrl);
+        return new Response(await extractCaptions(sandbox, videoUrl, captionLanguage), {
           headers: { "content-type": "text/vtt; charset=utf-8" },
         });
       }
@@ -567,6 +595,12 @@ export default {
       }
 
       console.error(JSON.stringify({ event: "request_failed", path: requestUrl.pathname, message }));
+      if (/HTTP Error 429\b/i.test(message)) {
+        return Response.json(
+          { error: "YouTube is temporarily limiting caption requests. Please wait a few minutes and try again." },
+          { status: 503, headers: { "retry-after": "60", "cache-control": "no-store" } },
+        );
+      }
       const status = /timed?\s*out|timeout/i.test(message) ? 504 : 502;
       return Response.json(
         { error: status === 504 ? "The video took too long to process" : "The video could not be processed" },

@@ -59,9 +59,18 @@ Do not expose fixture seed/expiry endpoints in the production Worker.
 | S4 | Expiration and cleanup | Set fixture expiry in the past without cleaning storage: reads return 404. Invoke the alarm handler and confirm storage is empty. |
 | S5 | Invalid links | Malformed and unknown IDs return 404 with an unavailable message, no-store, and noindex. The page offers a link home. |
 | S6 | Optional sharing failure | Reject snapshot creation: the summary still returns successfully with `share: null`. |
-| S7 | Shared UI | Desktop and mobile, light and dark: title/channel/duration, formatted brief, YouTube link, expiry, Copy, and Copy share link are readable without clipped controls. |
+| S7 | Shared UI | Desktop and mobile, light and dark: title/channel/duration, formatted brief, YouTube link, Copy, and Share are readable without clipped controls. The expiry notice is hidden initially, appears on Share (including clipboard fallback), and resets when a new result is displayed. Successful copying adds no second visible status line, but remains announced to screen readers. On the generation page, the result-state hero logo stays centered at landing-page size. |
 | S8 | Clipboard and accessibility | Copy succeeds where clipboard permission is granted; when blocked, a labeled, selected, read-only URL is available. Native buttons/links support keyboard input. Incorrect client time does not block forwarding. |
 | S9 | Routing and response headers | `/s/:id` serves the UI shell and `/api/shares/:id` serves JSON without `TEST_TOKEN`. Shared responses use no-store/noindex; shared views do not load Turnstile. |
 
 Run `npm run cf-typegen`, `npm run typecheck`, and `git diff --check`.
 After deployment, repeat a real generation and share-link open in a second browser.
+
+## Caption selection and upstream throttling
+
+| ID | Test | Pass condition |
+| --- | --- | --- |
+| C1 | English caption selection | Prefer authored English captions over automatic tracks, original English automatic captions over translated variants, and accept regional English variants. Ignore malformed/empty/non-English tracks. |
+| C2 | Single-track extraction | Request exactly the selected English language with an anchored expression. No wildcard English downloads; no extraction command when no English track exists. |
+| C3 | YouTube rate limit | A yt-dlp HTTP 429 from metadata or caption extraction yields 503, a retry-later explanation, Retry-After, and no-store. Other failures and timeouts retain their existing responses. |
+| C4 | Result compatibility | Caption-selection metadata does not leak into summary results. Video/transcript size limits, sharing, and caching remain intact. |
