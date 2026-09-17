@@ -1,7 +1,8 @@
 # YT;DW Test Results
 
-Status: historical deployed checks passed; current reliability/hardening changes
-pass local validation and are not deployed. Container image and migration unchanged.
+Status: reliability/hardening changes deployed after passing local validation.
+Live clipboard, recipient sharing, and header checks passed; new-generation and
+replacement-failure smoke checks remain incomplete. Container image and account unchanged.
 
 | ID | Status | Evidence |
 | --- | --- | --- |
@@ -175,14 +176,15 @@ checks for this release follow the table.
   `--containers-rollout=none`. Verified production CSS contains the 28px
   result-state rule and retains the larger responsive landing-page rule.
 
-## Reliability and hardening — local, not deployed
+## Reliability and hardening
 
 ### Scope
 
 - Fixes apply to UI behavior, Worker coordination/cache/limits, browser headers,
   and development-tool dependencies. The Sandbox SDK remains pinned to `0.12.1`
-  and `Dockerfile` is identical to the deployed version. No new image, GitHub
-  workflow, account migration, or production deployment was performed.
+  and `Dockerfile` is identical to the previously deployed version. No new image,
+  GitHub workflow, or account migration was performed. Worker/UI deployment is
+  recorded below.
 - The draft container upgrade/build workflow was set aside outside the repository
   after the user chose to keep the existing image. Container scans and package
   refreshes are not claimed as part of this release.
@@ -212,6 +214,29 @@ checks for this release follow the table.
   bundle/configuration check passed. This did not upload or deploy a version.
 - Production YouTube/AI, native iOS clipboard,
   and real assistive-technology speech were not exercised in this local pass.
+
+### Production release and smoke checks
+
+- Release commit `522e6de` was fast-forward merged and pushed to `main`.
+- Deployed version `00cc9a57-623b-4b9a-ba21-8b86401f7e9e` to the existing
+  `ssteiner` account using `--containers-rollout=none`; the new request/share
+  limit bindings and external browser scripts are present.
+- A standalone real Chromium browser, with clipboard permissions granted and
+  **no mocked APIs or clipboard**, opened the existing All-In shared brief.
+  Copy matched the server's Markdown byte-for-byte. Share copied the unchanged
+  URL, and that URL loaded in a fresh recipient context at mobile width.
+- Verified unchanged share expiry, no recipient Turnstile requests, no page JS
+  errors, no horizontal overflow, no-store, anti-framing headers, and CSP without
+  inline-script permission. `/api/config` exposed only the public sitekey;
+  retired extraction routes returned 404, tokenless health returned 401, and
+  a null summary request returned 400.
+- The first live generation attempt passed Turnstile and began extraction, but
+  the shared browser panel navigated elsewhere and its request was canceled.
+  Separate automated-browser attempts remained at interactive verification and
+  submitted no generation request. A normal-browser generation and subsequent
+  failed-replacement check are still needed; they are not counted as passed.
+- Local-only smoke script:
+  `/var/folders/bv/9bz6lr4s1sd9hvy1r1q4vlz40000gn/T/opencode/ytdw-live-hardening-check.mjs`.
 
 ### Migration status
 
