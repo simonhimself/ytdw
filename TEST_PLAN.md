@@ -96,6 +96,7 @@ outcomes across desktop/mobile widths and light/dark themes.
 | U3 | Async feedback and focus | Late callbacks cannot modify a replacement brief; successful actions retain keyboard focus and expired sharing focuses the recovery link. |
 | U4 | Share recovery | Server-confirmed expiry offers regeneration without auto-submission; recipients get actionable recovery instructions without loading Turnstile. |
 | U5 | Responsive preferences | Large landing logo, centered 28px result logo, 16px mobile inputs, and no horizontal overflow in both themes. |
+| U6 | Turnstile placement | When visible, the normal-size widget is horizontally centered beneath the form on desktop and mobile. |
 
 Npm audit covers the JavaScript dependency tree, not the existing container image.
 Native iOS behavior and real screen-reader speech remain manual follow-up checks.

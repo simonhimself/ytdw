@@ -244,3 +244,10 @@ The destination account's existing Workers subdomain was read-only verified as
 `simons.workers.dev`. Migration remains a separate next step after these fixes;
 no target Worker, secrets, Turnstile widget, registry/image, or container was created.
 Existing production and share URLs still use `ytdw.ssteiner.workers.dev`.
+
+### Centered Turnstile widget — local validation
+
+- Centered the widget container with flex layout. Browser geometry checks using
+  a normal-size widget fixture passed at 1440px and 390px in light and dark modes.
+- All 48 browser tests, type checking, and `git diff --check` passed.
+- This CSS refinement is not yet deployed.

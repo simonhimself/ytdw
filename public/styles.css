@@ -278,7 +278,7 @@ input::placeholder { color: var(--kumo-text-placeholder); }
   text-align: center;
 }
 
-.turnstile { min-height: 0; }
+.turnstile { display: flex; justify-content: center; min-height: 0; }
 .turnstile-error { margin: 10px 0 0; color: var(--kumo-text-danger); font-size: var(--kumo-text-sm); }
 
 .status, .error {
