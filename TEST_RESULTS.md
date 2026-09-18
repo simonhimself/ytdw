@@ -1,5 +1,25 @@
 # YT;DW Test Results
 
+## Legacy account cleanup — September 18, 2026
+
+- Owner authorized retirement of YT;DW in `ssteiner`, account
+  `224ecf06b47e8b9e86863aca7726c5eb`.
+- Enumerated all 18 legacy SharedBrief objects: zero reported stored data. The
+  known old share API returned 404/expired before removal.
+- Deleted Worker `ytdw` (including its secrets/assets/bindings), all three Durable
+  Object namespaces, container `a0377bc1-1300-4686-ac86-325313946de3`, image
+  `ytdw-sandbox:a5d124af`, and Turnstile widget `0x4AAAAAAEeANLj7coT90tAS`.
+- Verified Worker settings return 404; namespace, container, image, and widget
+  inventories are empty in the old account.
+- Verified HTTPS homepage and `/api/config` responses on `ytdw.fyi`,
+  `www.ytdw.fyi`, and `ytdw.simons.workers.dev`: all 200 with the destination
+  sitekey. Destination container `a031ba34-c4e2-40a9-a863-9144cebf1f0e` remains ready.
+- A second read-only check confirmed the same empty legacy inventories and healthy
+  production endpoints. The old public hostname returned HTTP 404 with no redirect;
+  the destination container remained ready with one live instance.
+- Earlier legacy-preservation results below document the completed transition;
+  the legacy hostname and redirect are now retired.
+
 ## Button-only verification — September 17, 2026
 
 - Restored verification feedback to the button; the loading block and logo pulse
@@ -7,6 +27,9 @@
 - All 48 Chromium UI checks passed across desktop/mobile and light/dark themes,
   including hidden loading status during verification and the original timed sequence.
 - Type checking and diff checks passed during local pre-deployment validation.
+- Released as commit `182de9a`, deployed to `simonhimself` as version
+  `65c37e82-7565-499e-a0c0-d35b259cd285`. All three production hostnames served
+  JavaScript identical to the committed file after deployment.
 
 ## Restored loading sequence — September 17, 2026
 
@@ -16,8 +39,8 @@
   themes, including the timed sequence and clearing status after a failed request.
 - `npm run typecheck` and `git diff --check` passed before deployment.
 
-Status: production is live at `ytdw.fyi` on the `simonhimself` account; live generation and
-legacy-link preservation verified. The existing image was copied without a rebuild.
+Status: production is live at `ytdw.fyi` on the `simonhimself` account; the legacy
+`ssteiner` deployment is retired. The existing image was copied without a rebuild.
 Live failed-replacement and native assistive-technology checks remain manual follow-ups.
 
 | ID | Status | Evidence |

@@ -14,7 +14,7 @@ application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 - `public/styles.css` contains the Kumo-based light and dark themes.
 - `Dockerfile` defines the Sandbox image that runs `yt-dlp`.
 - `wrangler.jsonc` is the source of truth for Cloudflare bindings and deployment.
-- `wrangler.legacy.jsonc` maintains old-host redirects and existing share URLs.
+- `wrangler.legacy.jsonc` is historical only; its deployment was retired on 2026-09-18.
 
 The Worker uses Cloudflare Workers, Sandbox, Durable Objects, Workers AI,
 Turnstile, rate limits, static assets, and the Cache API.
@@ -62,7 +62,7 @@ npx wrangler deploy --profile default --containers-rollout=none
 ```
 
 The main config pins the `simonhimself` account and the existing image by digest.
-Legacy maintenance uses `--profile ssteiner --config wrangler.legacy.jsonc`.
+Do not deploy `wrangler.legacy.jsonc`; the old `ssteiner` resources were deleted.
 Verify `https://ytdw.fyi/` after deployment. `www.ytdw.fyi` and
 `ytdw.simons.workers.dev` remain supported aliases on the same Worker.
 
@@ -77,6 +77,5 @@ Verify `https://ytdw.fyi/` after deployment. `www.ytdw.fyi` and
 - Update `TEST_PLAN.md` and `TEST_RESULTS.md` when validation scope changes.
 - The existing Sandbox SDK/image remain at `0.12.1`; do not require a container
   rebuild or a CI pipeline for Worker/UI-only fixes.
-- Preserve legacy share links at `ytdw.ssteiner.workers.dev` until their original
-  expiry. Never redirect `/s/*` to the new account or delete legacy storage without
-  explicit authorization.
+- The legacy `ssteiner` deployment was retired with explicit authorization after
+  confirming its share objects had no stored data. Do not recreate those resources.

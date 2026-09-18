@@ -77,25 +77,17 @@ address stays enabled for existing links. Turnstile and the server's hostname
 allowlist cover all three production hostnames; local hosts are not accepted by
 production Siteverify validation.
 
-### Legacy URL transition
+### Retired legacy deployment
 
-`wrangler.legacy.jsonc` preserves the original `ssteiner` account's bindings and
-share storage. With `MIGRATION_TARGET` set, the old homepage redirects to the new
-app (including a prefilled video URL), and old generation requests ask the visitor
-to reload. Existing `/s/...` links and their read API remain on the original
-hostname until their fixed expiration. They are not redirected to empty storage
-in the new account.
+The `ssteiner` deployment was removed on September 18, 2026, at the owner's
+request. Before deletion, all 18 legacy share objects reported no stored data,
+and the known legacy share returned expired. The old Worker, its three Durable
+Object namespaces, container application, registry image, and Turnstile widget
+were removed. The old hostname no longer provides the app or a homepage redirect.
 
-For legacy-only maintenance, use:
-
-```bash
-npx wrangler deploy --profile ssteiner --config wrangler.legacy.jsonc --containers-rollout=none
-```
-
-Do not delete the old Worker or its Durable Object namespaces while valid links
-remain. The new account starts with a fresh summary cache; cached results and
-share snapshots were not bulk-copied. No automatic deletion of legacy resources
-is scheduled.
+`wrangler.legacy.jsonc` is retained solely as historical configuration; do not
+deploy it. All production deployments use `wrangler.jsonc` in `simonhimself`.
+Cached results and share snapshots were not bulk-copied between accounts.
 
 ### Recovery for the sharing release
 

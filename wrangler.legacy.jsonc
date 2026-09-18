@@ -1,4 +1,6 @@
 {
+  // Historical configuration only. The ssteiner deployment was retired on 2026-09-18.
+  // Its Worker, storage, container, image, and Turnstile widget were deleted; do not deploy.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ytdw",
   "account_id": "224ecf06b47e8b9e86863aca7726c5eb",

@@ -123,5 +123,14 @@ Native iOS behavior and real screen-reader speech remain manual follow-up checks
 - `https://ytdw.fyi/` and `https://www.ytdw.fyi/` serve the app with valid TLS.
 - `/api/config` returns the current sitekey on both hosts and the workers.dev alias.
 - Widget domains and production hostname validation include the custom hosts.
-- The legacy homepage redirects to `https://ytdw.fyi/`; old share reads remain on
-  their original storage and keep their original expiry.
+- During the completed migration, the legacy homepage redirected to `https://ytdw.fyi/`
+  and old share reads remained on their original storage until expiry.
+
+## Legacy retirement
+
+- Before deleting legacy share storage, enumerate all share objects and confirm
+  none retain stored data.
+- Verify the retired Worker's settings return 404 and its Durable Object,
+  container, registry image, and Turnstile resources are absent.
+- Verify all three destination homepages and public configuration endpoints still
+  return 200, and the destination container remains ready.
