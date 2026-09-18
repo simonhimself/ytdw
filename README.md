@@ -1,124 +1,114 @@
 # YT;DW
 
-YT;DW turns captioned YouTube videos into concise reading briefs. Paste a video URL, complete a quiet Turnstile check, and keep the useful parts without watching the whole video.
+**YouTube, Didn’t Watch.** Turn long YouTube videos into concise, structured reading briefs.
 
-[Open YT;DW](https://ytdw.fyi/)
+![YT;DW showing a completed brief with a summary, numbered key points, and Copy and Share buttons](docs/assets/brief-preview.png)
 
-## Stack
+*The current shared-brief view, shown with illustrative sample content.*
 
-- Cloudflare Workers serves the application and API.
-- Cloudflare Sandbox runs `yt-dlp` to retrieve public English captions.
-- Durable Objects bound the global queue, deduplicate jobs, and retain completed briefs.
-- Workers AI generates structured briefs with GLM 5.3 Flash.
-- Turnstile and rate limits protect the public endpoint.
-- A global 24-hour summary cache is accelerated by the edge Cache API.
-- Per-link Durable Objects store shareable brief snapshots for a fixed 24 hours.
+**[Try it at ytdw.fyi →](https://ytdw.fyi/)**
 
-## Sharing
+## Long video. Short, useful brief.
 
-After generating a brief, select **Share** to copy its link and reveal the expiry
-notice. Anyone with the link can read the same result, open the original YouTube
-video, and forward the link.
-The shared view requires no verification or additional AI generation.
+- **Get the key points.** Turn videos with English captions into a readable summary with organized takeaways.
+- **Take it with you.** Copy the brief as Markdown, with headings and numbered points intact.
+- **Share the result.** Send a link others can read without generating the brief again. Links expire after 24 hours.
 
-Links expire 24 hours after their snapshot is created, including for cached
-results. Opening or forwarding a link does not extend its lifetime. Expiry is
-checked on the server and a Durable Object alarm clears the snapshot. Raw
-transcripts are still discarded after processing.
+## How to use it
 
-**Copy** preserves the brief's Markdown headings, paragraphs, and numbering.
-Both copy actions offer manual selection if clipboard access is unavailable.
-Share checks whether the link still exists before copying it; expired links offer
-a way to prefill the original video URL and generate another brief.
+1. Paste a YouTube URL at **[ytdw.fyi](https://ytdw.fyi/)** and select **Summarize**.
+2. Complete verification if prompted, then wait for the brief.
+3. Read the summary, **Copy** it to your notes, or **Share** a link. Use **Watch on YouTube** to return to the source.
 
-## Development
+Share links are readable by anyone who has the link. Their 24-hour lifetime starts
+when the snapshot is created, not when you click Share; opening or forwarding one
+doesn’t extend it. Raw transcripts are discarded after processing.
+
+## How it works
+
+```mermaid
+flowchart LR
+    URL[YouTube URL] --> API[Worker API]
+    API --> Queue[Durable Object coordinator]
+    Queue --> Captions[Sandbox: retrieve captions]
+    Captions --> AI[Workers AI: summarize]
+    AI --> Brief[Reading brief]
+    Queue -. cached result .-> Brief
+    Brief --> Share[24-hour share snapshot]
+```
+
+A small HTML, CSS, and JavaScript frontend sits on a Cloudflare Worker. Sandbox
+runs `yt-dlp` to retrieve captions, and Workers AI creates the brief with
+GLM 5.3 Flash. Turnstile and rate limits protect generation requests.
+
+Three engineering choices keep the public app manageable:
+
+- **Bounded work:** a Durable Object coordinator limits the processing queue and
+  combines simultaneous requests for the same video.
+- **Reusable results:** completed briefs are cached globally for 24 hours, with
+  the edge Cache API providing another caching layer.
+- **Temporary sharing:** each share snapshot has a fixed expiry, enforced on
+  reads and cleaned up by a Durable Object alarm. Recipients don’t trigger another
+  AI request.
+
+## Run locally
+
+Use a current Node.js LTS release and npm.
 
 ```bash
+git clone https://github.com/simonhimself/ytdw.git
+cd ytdw
 npm install
 npm run cf-typegen
+```
+
+For frontend work without running the Sandbox container:
+
+```bash
+npm run dev -- --enable-containers=false
+```
+
+This starts the app for UI development; it does not provide local video extraction.
+Full generation needs Docker running for Sandbox, Cloudflare access for Workers AI,
+and a Turnstile widget/secret configured for your development hostname. With those
+set up, use `npm run dev`.
+
+The checked-in deployment configuration targets the existing production account
+and image. See the [operations guide](docs/OPERATIONS.md) before deploying a fork
+or changing production settings.
+
+### Validate changes
+
+```bash
 npm run typecheck
 npm test
 npm run test:ui
-npm run dev
 ```
 
-The tests use a local Workers runtime with simulated YouTube/AI responses and a
-real Chromium browser. They do not require Docker or production credentials.
-The browser tests use installed Google Chrome on macOS, or Playwright Chromium
-(`npx playwright install chromium`). Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to
-use another local Chromium binary.
+The tests use a real local Workers/SQLite runtime with mocked upstream services,
+plus Chromium for browser checks. They need neither Docker nor production
+credentials. Browser tests cover desktop/mobile widths in light and dark themes.
 
-Docker is only needed to run the actual Sandbox locally or rebuild its image.
-The existing Sandbox SDK and image remain at `0.12.1`.
+On macOS, the browser suite uses installed Google Chrome; otherwise install
+Chromium with `npx playwright install chromium`. You can also set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to use another local Chromium binary.
 
-Browser behavior lives in `public/app.js`; `public/theme.js` initializes the theme
-before first paint. The UI gets its public Turnstile sitekey from `/api/config`.
+## Limitations
 
-## Deployment
+- Videos need public English captions and must be no longer than **six hours**.
+- Transcript input is limited to **400,000 characters**.
+- Briefs are based on captions, not visual content. AI summaries can miss nuance
+  or make mistakes; use the original video when accuracy matters.
+- The public service has limited processing capacity. Requests may queue or ask
+  you to retry, and YouTube caption retrieval can be throttled.
+- Share links are temporary, not a permanent archive. Copy a brief to keep it.
 
-```bash
-npx wrangler deploy --profile default --containers-rollout=none
-```
+## Project guide
 
-The production Worker also requires `TURNSTILE_SECRET` and `TEST_TOKEN` secrets. Set them with `wrangler secret put`; never commit their values.
-
-This command reuses the deployed container image. No Docker build or GitHub
-workflow is needed for the current Worker/UI changes. `/health` remains protected
-by `TEST_TOKEN`; the old `/metadata` and `/captions` execution endpoints are
-retired so extraction cannot bypass the coordinated queue.
-
-`wrangler.jsonc` pins the `simonhimself` account and the copied image's immutable
-registry digest. The image is byte-for-byte identical to the original; it was
-transferred directly between Cloudflare registries without rebuilding it.
-
-The primary address is `https://ytdw.fyi/`; `www.ytdw.fyi` serves the same Worker.
-Cloudflare manages their DNS and HTTPS certificates. The `ytdw.simons.workers.dev`
-address stays enabled for existing links. Turnstile and the server's hostname
-allowlist cover all three production hostnames; local hosts are not accepted by
-production Siteverify validation.
-
-### Retired legacy deployment
-
-The `ssteiner` deployment was removed on September 18, 2026, at the owner's
-request. Before deletion, all 18 legacy share objects reported no stored data,
-and the known legacy share returned expired. The old Worker, its three Durable
-Object namespaces, container application, registry image, and Turnstile widget
-were removed. The old hostname no longer provides the app or a homepage redirect.
-
-`wrangler.legacy.jsonc` is retained solely as historical configuration; do not
-deploy it. All production deployments use `wrangler.jsonc` in `simonhimself`.
-Cached results and share snapshots were not bulk-copied between accounts.
-
-### Recovery for the sharing release
-
-The sharing release adds the `SharedBrief` Durable Object in migration `v3`.
-Cloudflare does not allow a normal version rollback across this class migration.
-To restore the pre-sharing behavior, deploy the application logic and UI from
-commit `f40cb11`, while retaining the new `SharedBrief` export, its binding, and
-the migration history. Keep its alarm handler so existing snapshots are cleaned
-up. Do not remove or reverse the migration. Since the Sandbox image is unchanged,
-this recovery can use `npx wrangler deploy --containers-rollout=none` against the
-existing production Worker.
-
-## Limits
-
-- English-captioned YouTube videos only
-- Maximum video duration of six hours
-- Maximum transcript input of 400,000 characters
-- One Sandbox container with globally coordinated work
-- At most one processing job plus two waiting jobs; waiting jobs expire after 90 seconds
-- At most five new generation jobs admitted globally per rolling 10 seconds
-- Six-minute processing deadline, with per-command deadlines of at most two minutes
-- Ambiguous extraction failures retain a short recovery barrier rather than immediately retrying a potentially running subprocess
-- Per-client submission and share-read limits reject excess traffic before upstream work
-
-## Maintenance
-
-Run `npm audit` when updating development tools and keep `package-lock.json` in
-sync. Test runtime and browser behavior before deploying a toolchain update.
-External scripts allow a stricter CSP without inline JavaScript; static and
-Worker-generated responses both deny framing. Container upgrades and image scans
-are separate maintenance work requiring an actual image build, and are not part
-of this release.
-
-See `TEST_PLAN.md` and `TEST_RESULTS.md` for validation details.
+| File | Purpose |
+| --- | --- |
+| [`src/index.ts`](src/index.ts) | Worker API, transcript processing, caching, and Durable Objects |
+| [`public/`](public/) | UI markup, behavior, and light/dark themes |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Deployment, service limits, maintenance, and migration history |
+| [`TEST_PLAN.md`](TEST_PLAN.md) | Validation scope and manual checks |
+| [`TEST_RESULTS.md`](TEST_RESULTS.md) | Recorded test and deployment evidence |
