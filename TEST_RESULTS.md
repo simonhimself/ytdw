@@ -203,6 +203,23 @@ checks for this release follow the table.
 - A Sandbox alarm logged a deployment-related Durable Object reset; it did not
   prevent the successful summary request.
 
+### Caption client PO-token failure — October 10, 2026
+
+- Production logs showed `Unable to download video subtitles for 'en-orig':
+  HTTP Error 429: Too Many Requests` for `aUrSDMtzsEc` at 08:13 and 08:33 UTC.
+  yt-dlp's default `web` client needs a "Subs" PO token, and unattested caption
+  requests from Cloudflare's datacenter egress are throttled.
+- Both yt-dlp commands now pass
+  `--extractor-args "youtube:player_client=android_vr"`, a client listed as not
+  requiring a PO token. The 429 message now says the block usually clears within
+  a few hours instead of minutes; the 503 and Retry-After behaviour is unchanged.
+- Local verification: `uvx yt-dlp` with the `android_vr` client downloaded
+  `en-orig` captions for `aUrSDMtzsEc`, and `--dump-single-json` still exposed
+  `automatic_captions` keys `en` and `en-orig`. The `tv`, `web_embedded`, and
+  `mweb` clients failed with format errors.
+- `npm run typecheck`, `npm test`, and `git diff --check` passed.
+- Production verification is still pending; this change has not been deployed.
+
 ### Compact centered result logo — local validation
 
 - Restored the result-state logo to 28px while retaining center alignment. The

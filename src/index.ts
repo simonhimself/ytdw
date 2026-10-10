@@ -11,6 +11,11 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 const MODEL = "@cf/zai-org/glm-5.3-flash";
 const COMMAND_TIMEOUT = 120_000;
+// yt-dlp's default web client needs a "Subs" PO token for caption downloads;
+// unattested requests from Cloudflare's datacenter egress get HTTP 429. The
+// android_vr client does not require a PO token and still lists automatic
+// captions. See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+const YTDLP_CLIENT_ARGS = '--extractor-args "youtube:player_client=android_vr"';
 const MAX_REQUEST_BYTES = 8_192;
 const MAX_VIDEO_SECONDS = 21_600;
 const MAX_TRANSCRIPT_CHARACTERS = 400_000;
@@ -93,7 +98,7 @@ function processingFailure(error: unknown): SummaryFailure {
   const message = error instanceof Error ? error.message : "Unknown error";
   if (error instanceof BadRequestError) return { ok: false, status: 400, error: message };
   if (/HTTP Error 429\b/i.test(message)) {
-    return { ok: false, status: 503, error: "YouTube is temporarily limiting caption requests. Please wait a few minutes and try again.", retryAfter: 60 };
+    return { ok: false, status: 503, error: "YouTube is currently refusing caption requests from our servers. This usually clears within a few hours; please try again later.", retryAfter: 60 };
   }
   if (/timed?\s*out|timeout/i.test(message)) {
     return { ok: false, status: 504, error: "The video took too long to process. Please try again in a moment." };
@@ -265,7 +270,7 @@ async function extractMetadata(
   const encodedUrl = Buffer.from(videoUrl).toString("base64");
   const result = await execBeforeDeadline(
     sandbox,
-    `${decodeUrlCommand(encodedUrl)} && timeout --signal=TERM --kill-after=5s "$remaining"s yt-dlp --compat-options no-certifi --js-runtimes node --no-playlist --skip-download --dump-single-json "$url"`,
+    `${decodeUrlCommand(encodedUrl)} && timeout --signal=TERM --kill-after=5s "$remaining"s yt-dlp --compat-options no-certifi --js-runtimes node ${YTDLP_CLIENT_ARGS} --no-playlist --skip-download --dump-single-json "$url"`,
     deadline,
   );
   if (!result.success) {
@@ -308,7 +313,7 @@ async function extractCaptions(
       "trap 'rm -rf \"$output_dir\"' EXIT",
       `mkdir -p '${outputDir}'`,
       decodeUrlCommand(encodedUrl),
-      `timeout --signal=TERM --kill-after=5s "$remaining"s yt-dlp --compat-options no-certifi --js-runtimes node --quiet --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs --sub-langs '^${captionLanguage}$' --sub-format vtt --output '${outputDir}/%(id)s.%(ext)s' \"$url\"`,
+      `timeout --signal=TERM --kill-after=5s "$remaining"s yt-dlp --compat-options no-certifi --js-runtimes node ${YTDLP_CLIENT_ARGS} --quiet --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs --sub-langs '^${captionLanguage}$' --sub-format vtt --output '${outputDir}/%(id)s.%(ext)s' \"$url\"`,
       `file=$(find '${outputDir}' -type f -name '*.vtt' | head -n 1)`,
       "if test -z \"$file\"; then exit 3; fi",
       "if test $(stat -c%s \"$file\") -gt 2097152; then exit 4; fi",
