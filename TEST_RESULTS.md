@@ -218,7 +218,18 @@ checks for this release follow the table.
   `automatic_captions` keys `en` and `en-orig`. The `tv`, `web_embedded`, and
   `mweb` clients failed with format errors.
 - `npm run typecheck`, `npm test`, and `git diff --check` passed.
-- Production verification is still pending; this change has not been deployed.
+- **Production verification failed.** Deployed as version
+  `91f1dd03-2912-4bcc-821e-f1c9d526e025` (commit `1e21ccb`) with
+  `--containers-rollout=none`. Two live retries of `aUrSDMtzsEc` at 10:15 UTC
+  (agent browser and the owner's browser) both returned 503; logs showed the
+  identical `Unable to download video subtitles for 'en-orig': HTTP Error 429`
+  from the caption subprocess. The deployed bundle was confirmed to contain the
+  `android_vr` flag, and metadata extraction succeeded with that client, so the
+  client switch is not sufficient: the `timedtext` caption endpoint is throttled
+  for this egress regardless of player client. The reworded 429 message was
+  shown correctly. The change is retained as harmless; the next step is a
+  container rebuild with a PO Token Provider (`bgutil-ytdlp-pot-provider`
+  supports the `subs` context since May 2025).
 
 ### Compact centered result logo — local validation
 
