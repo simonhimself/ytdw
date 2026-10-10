@@ -11,14 +11,14 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 const MODEL = "@cf/zai-org/glm-5.3-flash";
 const COMMAND_TIMEOUT = 120_000;
-// yt-dlp's default web client needs a "Subs" PO token for caption downloads;
-// unattested requests from Cloudflare's datacenter egress get HTTP 429. The
-// android_vr client does not require a PO token and still lists automatic
-// captions. See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+// android_vr needs no PO token for metadata and still lists automatic captions
+// (https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). Switching clients did
+// not fix caption 429s on its own; see fetchCaptions.
 const YTDLP_CLIENT_ARGS = '--extractor-args "youtube:player_client=android_vr"';
 const MAX_REQUEST_BYTES = 8_192;
 const MAX_VIDEO_SECONDS = 21_600;
 const MAX_TRANSCRIPT_CHARACTERS = 400_000;
+const MAX_CAPTION_BYTES = 2_097_152;
 const SHARE_TTL_MS = 24 * 60 * 60 * 1000;
 const SHARE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHARE_HEADERS = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" };
@@ -66,7 +66,7 @@ interface VideoMetadata {
 }
 
 interface ExtractedVideoMetadata extends VideoMetadata {
-  captionLanguage: string | null;
+  captionUrl: string | null;
 }
 
 interface TurnstileResult {
@@ -245,19 +245,28 @@ async function execBeforeDeadline(sandbox: SandboxInstance, command: string, dea
   }
 }
 
-function selectEnglishCaptionLanguage(metadata: Record<string, unknown>): string | null {
+function vttUrl(formats: unknown): string | null {
+  if (!Array.isArray(formats)) return null;
+  for (const format of formats) {
+    if (format && typeof format === "object" && format.ext === "vtt" && typeof format.url === "string") return format.url;
+  }
+  return null;
+}
+
+function selectEnglishCaptionUrl(metadata: Record<string, unknown>): string | null {
   // Prefer authored captions, then original English auto-captions. Download one
-  // track only: requesting en.* downloads every variant and can trigger throttling.
+  // track only: requesting every en.* variant can trigger throttling.
   for (const captions of [metadata.subtitles, metadata.automatic_captions]) {
     if (!captions || typeof captions !== "object" || Array.isArray(captions)) continue;
-    const languages = Object.entries(captions)
-      .filter(([language, formats]) => /^en(?:[-_][A-Za-z0-9]+)*$/.test(language) && Array.isArray(formats) && formats.length > 0)
-      .map(([language]) => language)
-      .sort();
-    for (const preferred of ["en-orig", "en"]) {
-      if (languages.includes(preferred)) return preferred;
-    }
-    if (languages.length) return languages[0];
+    const tracks = new Map(
+      Object.entries(captions)
+        .filter(([language]) => /^en(?:[-_][A-Za-z0-9]+)*$/.test(language))
+        .map(([language, formats]) => [language, vttUrl(formats)] as const)
+        .filter((track): track is readonly [string, string] => track[1] !== null),
+    );
+    const languages = [...tracks.keys()].sort();
+    const language = ["en-orig", "en"].find((preferred) => tracks.has(preferred)) ?? languages[0];
+    if (language) return tracks.get(language)!;
   }
   return null;
 }
@@ -291,47 +300,53 @@ async function extractMetadata(
     title: metadata.title,
     duration: metadata.duration,
     uploader: typeof metadata.uploader === "string" ? metadata.uploader : undefined,
-    captionLanguage: selectEnglishCaptionLanguage(metadata),
+    captionUrl: selectEnglishCaptionUrl(metadata),
   };
 }
 
-async function extractCaptions(
-  sandbox: SandboxInstance,
-  videoUrl: string,
-  captionLanguage: string | null,
-  deadline = Date.now() + COMMAND_TIMEOUT,
-): Promise<string> {
-  if (!captionLanguage || !/^en(?:[-_][A-Za-z0-9]+)*$/.test(captionLanguage)) {
-    throw new BadRequestError("This video has no English captions");
+// Caption downloads by yt-dlp inside the Sandbox get HTTP 429 from YouTube,
+// while the same caption URL fetched by the Worker succeeds. yt-dlp still
+// provides metadata (which the Worker cannot obtain past YouTube's bot check);
+// the Worker downloads only the caption track that metadata selected.
+async function fetchCaptions(captionUrl: string | null, deadline: number): Promise<string> {
+  if (!captionUrl) throw new BadRequestError("This video has no English captions");
+  // The URL comes from subprocess output: only fetch YouTube's caption endpoint.
+  let url: URL;
+  try { url = new URL(captionUrl); }
+  catch { throw new Error("YouTube returned an invalid caption URL"); }
+  if (url.protocol !== "https:" || url.hostname !== "www.youtube.com" || url.pathname !== "/api/timedtext") {
+    throw new Error("YouTube returned an unexpected caption URL");
   }
-  const encodedUrl = Buffer.from(videoUrl).toString("base64");
-  const outputDir = `/tmp/yt-captions-${crypto.randomUUID()}`;
-  const result = await execBeforeDeadline(
-    sandbox,
-    [
-      `output_dir='${outputDir}'`,
-      "trap 'rm -rf \"$output_dir\"' EXIT",
-      `mkdir -p '${outputDir}'`,
-      decodeUrlCommand(encodedUrl),
-      `timeout --signal=TERM --kill-after=5s "$remaining"s yt-dlp --compat-options no-certifi --js-runtimes node ${YTDLP_CLIENT_ARGS} --quiet --no-warnings --no-playlist --skip-download --write-subs --write-auto-subs --sub-langs '^${captionLanguage}$' --sub-format vtt --output '${outputDir}/%(id)s.%(ext)s' \"$url\"`,
-      `file=$(find '${outputDir}' -type f -name '*.vtt' | head -n 1)`,
-      "if test -z \"$file\"; then exit 3; fi",
-      "if test $(stat -c%s \"$file\") -gt 2097152; then exit 4; fi",
-      "cat \"$file\"",
-    ].join(" && "),
-    deadline,
-  );
-
-  if (result.exitCode === 3) {
-    throw new BadRequestError("This video has no English captions");
+  if (deadline - Date.now() < 1000) throw new Error("Caption download timed out");
+  const signal = AbortSignal.timeout(Math.min(COMMAND_TIMEOUT, deadline - Date.now()));
+  try {
+    const response = await fetch(url, { signal });
+    if (!response.ok) {
+      await response.body?.cancel();
+      // Matches yt-dlp's wording so processingFailure maps 429 to retry-later.
+      throw new Error(`HTTP Error ${response.status}: caption download failed`);
+    }
+    if (!response.body) throw new Error("YouTube returned invalid captions");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_CAPTION_BYTES) {
+        await reader.cancel();
+        throw new Error("YouTube returned oversized captions");
+      }
+      chunks.push(value);
+    }
+    const vtt = new TextDecoder().decode(Buffer.concat(chunks));
+    if (!vtt.startsWith("WEBVTT")) throw new Error("YouTube returned invalid captions");
+    return vtt;
+  } catch (error) {
+    if (signal.aborted) throw new Error("Caption download timed out");
+    throw error;
   }
-  if (!result.success) {
-    throw new Error(result.exitCode === 124 ? "Caption extraction timed out" : result.stderr);
-  }
-  if (!result.stdout.startsWith("WEBVTT")) {
-    throw new Error("YouTube returned invalid captions");
-  }
-  return result.stdout;
 }
 
 function captionsToText(vtt: string): string {
@@ -568,11 +583,11 @@ async function summarizeVideo(videoUrl: string, env: Env, deadline = Date.now() 
     enableDefaultSession: false,
     transport: "rpc",
   });
-  const { captionLanguage, ...metadata } = await extractMetadata(sandbox, videoUrl, deadline);
+  const { captionUrl, ...metadata } = await extractMetadata(sandbox, videoUrl, deadline);
   if (metadata.duration > MAX_VIDEO_SECONDS) {
     throw new BadRequestError("Videos longer than six hours are not supported");
   }
-  const captions = await extractCaptions(sandbox, videoUrl, captionLanguage, deadline);
+  const captions = await fetchCaptions(captionUrl, deadline);
   const transcript = fitTranscript(captionsToText(captions));
   if (!transcript.text) throw new BadRequestError("The captions were empty");
 

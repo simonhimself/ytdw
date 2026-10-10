@@ -78,8 +78,8 @@ After deployment, repeat a real generation and share-link open in a second brows
 | ID | Test | Pass condition |
 | --- | --- | --- |
 | C1 | English caption selection | Prefer authored English captions over automatic tracks, original English automatic captions over translated variants, and accept regional English variants. Ignore malformed/empty/non-English tracks. |
-| C2 | Single-track extraction | Request exactly the selected English language with an anchored expression. No wildcard English downloads; no extraction command when no English track exists. |
-| C3 | YouTube rate limit | A yt-dlp HTTP 429 from metadata or caption extraction yields 503, a retry-later explanation, Retry-After, and no-store. Other failures and timeouts retain their existing responses. Both yt-dlp commands use `--extractor-args "youtube:player_client=android_vr"` (no PO token required); verify production caption downloads succeed for a previously throttled video such as `aUrSDMtzsEc`. |
+| C2 | Single-track download | The Sandbox runs only the metadata command. The Worker fetches exactly one `vtt` URL for the selected English track, only from `https://www.youtube.com/api/timedtext`; any other caption URL is rejected without a request. No caption request when no English track exists. Caption bodies are capped at 2 MiB and bounded by the processing deadline. |
+| C3 | YouTube rate limit | An HTTP 429 from metadata extraction or the Worker caption fetch yields 503, a retry-later explanation, Retry-After, and no-store. Other failures and timeouts retain their existing responses. Metadata uses `--extractor-args "youtube:player_client=android_vr"`; verify in production that a previously throttled video such as `aUrSDMtzsEc` summarizes successfully. |
 | C4 | Result compatibility | Caption-selection metadata does not leak into summary results. Video/transcript size limits, sharing, and caching remain intact. |
 
 ## Reliability and hardening suite

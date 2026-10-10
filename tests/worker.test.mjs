@@ -139,6 +139,27 @@ test('startup delays are bounded and late commands cannot begin media extraction
   assert.equal((await h.post(video(45), scope)).status, 200);
 });
 
+test('the Worker fetches one vtt caption track; caption 429s retry later; foreign caption hosts are never fetched', async () => {
+  const scope = 'captions';
+  const ok = video(60);
+  assert.equal((await h.post(ok, scope)).status, 200);
+  const fetched = h.captionRequests().filter(url => url.includes(`v=${ok}`));
+  assert.deepEqual(fetched, [`https://www.youtube.com/api/timedtext?v=${ok}&lang=en-orig&fmt=vtt`]);
+
+  const throttled = video(61);
+  h.failCaptions(throttled, 429);
+  const limited = await h.post(throttled, scope);
+  assert.equal(limited.status, 503);
+  assert.equal(limited.headers.get('retry-after'), '60');
+  assert.match((await limited.json()).error, /refusing caption requests/);
+
+  const foreign = video(62);
+  await h.control('foreign-caption-host', foreign, scope);
+  const before = h.captionRequests().length;
+  assert.equal((await h.post(foreign, scope)).status, 502);
+  assert.equal(h.captionRequests().length, before);
+});
+
 test('diagnostics fail closed and extraction endpoints cannot bypass the queue', async () => {
   const calls = (await h.control('stats')).commands;
   for (const endpoint of ['/metadata', '/captions']) {

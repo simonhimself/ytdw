@@ -231,6 +231,32 @@ checks for this release follow the table.
   container rebuild with a PO Token Provider (`bgutil-ytdlp-pot-provider`
   supports the `subs` context since May 2025).
 
+### Worker caption fetch — October 10, 2026
+
+- Probes from Cloudflare narrowed the failure: a plain Worker `fetch()` and
+  Browser Rendering both downloaded the `timedtext` VTT for `aUrSDMtzsEc`
+  (HTTP 200, byte-identical to a local download), while yt-dlp inside the
+  Sandbox received 429. Conversely, the Worker could not obtain metadata:
+  YouTube's player API returned `LOGIN_REQUIRED` ("Sign in to confirm you're
+  not a bot") for both `ANDROID_VR` and `WEB` clients, and the watch page
+  returned 429. yt-dlp metadata extraction succeeds in the Sandbox. The probe
+  Worker ran only under `wrangler dev --remote`; nothing was deployed for it.
+- Caveat: every successful Worker/Browser Rendering caption fetch used a URL
+  produced by a local yt-dlp session. Whether URLs produced by the Sandbox's
+  session fetch successfully is only testable in production.
+- Change: the Sandbox now runs only the metadata command. The Worker selects
+  one English track (authored, then `en-orig`, then `en`, then other regional
+  English), takes its `vtt` URL from the metadata, accepts only
+  `https://www.youtube.com/api/timedtext`, and fetches it with the processing
+  deadline and a streamed 2 MiB cap. A caption 429 maps to the existing 503
+  retry-later response. The `android_vr` metadata client is retained.
+- `npm test`: **12 passed**, including a new case for single `vtt` selection
+  among multiple tracks/formats, caption 429 → 503 with Retry-After, and a
+  foreign caption host rejected without any outbound request. The harness
+  Sandbox now fails if asked to run anything other than metadata.
+  `npm run typecheck` and `git diff --check` passed.
+- Production verification pending (not yet deployed).
+
 ### Compact centered result logo — local validation
 
 - Restored the result-state logo to 28px while retaining center alignment. The

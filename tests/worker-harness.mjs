@@ -22,6 +22,7 @@ const pending = new Map();
 const brokenTransports = new Set();
 const slowStartups = new Set();
 const delayedCommands = new Map();
+const captionHosts = new Map();
 async function exec(command) {
   counts.commands++;
   if (command.includes('python3 --version')) return {success:true,exitCode:0,stdout:'fixture tools',stderr:''};
@@ -35,9 +36,11 @@ async function exec(command) {
     if (Date.now() >= deadline-6000) return {success:false,exitCode:124,stdout:'',stderr:''};
   }
   counts.mediaStarts++;
-  if (command.includes('--dump-single-json')) return {success:true,exitCode:0,stdout:JSON.stringify({id,title:'Fixture '+id,duration:300,automatic_captions:{'en-orig':[{ext:'vtt'}]}}),stderr:''};
-  if (!command.includes("--sub-langs '^en-orig$'")) throw new Error('Expected a single original English track');
-  return {success:true,exitCode:0,stdout:'WEBVTT\\n\\n00:00:00.000 --> 00:00:01.000\\nTest captions.',stderr:''};
+  if (!command.includes('--dump-single-json')) throw new Error('Captions must be fetched by the Worker, not the Sandbox');
+  // Caption host is overridable per video so tests can check URL validation.
+  const host = captionHosts.get(id) ?? 'www.youtube.com';
+  const track = lang => [{ext:'json3',url:'https://'+host+'/api/timedtext?v='+id+'&lang='+lang+'&fmt=json3'},{ext:'vtt',url:'https://'+host+'/api/timedtext?v='+id+'&lang='+lang+'&fmt=vtt'}];
+  return {success:true,exitCode:0,stdout:JSON.stringify({id,title:'Fixture '+id,duration:300,automatic_captions:{'en':track('en'),'en-orig':track('en-orig'),'de':track('de')}}),stderr:''};
 }
 async function run(model, input, options) {
   counts.model++;
@@ -78,6 +81,7 @@ export default { async fetch(request, env) {
     if (action === 'hold') held.add(id);
     if (action === 'break-transport') brokenTransports.add(id);
     if (action === 'slow-startup') slowStartups.add(id);
+    if (action === 'foreign-caption-host') captionHosts.set(id, 'evil.example');
     if (action === 'release-startup') {delayedCommands.get(id)?.();delayedCommands.delete(id);}
     if (action === 'release') {held.delete(id);pending.get(id)?.();pending.delete(id);}
     if (action === 'clear-edge') await caches.default.delete(new Request('https://summary-cache.internal/v4/'+id));
@@ -103,6 +107,8 @@ export default { async fetch(request, env) {
     builder.onLoad({ filter: /.*/, namespace: 'mock' }, () => ({ contents: 'export const getSandbox = binding => binding; export class Sandbox {}', loader: 'js' }));
   } }] });
   let verifications = 0;
+  const captionRequests = [];
+  const captionStatuses = new Map();
   const options = { port: 0, workers: [{ config: {
     name: 'test-ytdw', type: 'worker', compatibilityDate: '2026-08-27', compatibilityFlags: ['nodejs_compat'],
     manifest: { mainModule: 'index.js', modulesRoot: root, modules: { 'index.js': { type: 'esm', contents: bundled.outputFiles[0].text } } },
@@ -116,6 +122,13 @@ export default { async fetch(request, env) {
     },
     assets: { directory: `${root}/public`, hasUserWorker: true, runWorkerFirst: ['/api/*', '/s/*', '/__*'] },
   }, dev: { outboundService: { type: 'fetcher', handler: async (request) => {
+    const url = new URL(request.url);
+    if (url.hostname === 'www.youtube.com' && url.pathname === '/api/timedtext') {
+      captionRequests.push(request.url);
+      const status = captionStatuses.get(url.searchParams.get('v'));
+      if (status) return new Response('Too Many Requests', { status });
+      return new Response('WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nTest captions.');
+    }
     if (!request.url.includes('/turnstile/v0/siteverify')) throw new Error('Unexpected outbound request');
     verifications++;
     return Response.json({ success: true, action: 'summarize', hostname: 'localhost' });
@@ -125,7 +138,8 @@ export default { async fetch(request, env) {
   const request = (path, init = {}) => mf.dispatchFetch(`http://localhost${path}`, init);
   const control = async (action, id, scope = 'global') => (await request('/__control', { method: 'POST', headers: { 'x-test-scope': scope }, body: JSON.stringify({ action, id }) })).json();
   const post = (id, scope = 'global', headers = {}) => request('/api/summarize', { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-scope': scope, ...headers }, body: JSON.stringify({ url: `https://youtu.be/${id}`, turnstileToken: 'fixture-token' }) });
-  return { mf, request, control, post, verifications: () => verifications, async reload() {
+  return { mf, request, control, post, verifications: () => verifications,
+    captionRequests: () => [...captionRequests], failCaptions: (id, status) => captionStatuses.set(id, status), async reload() {
     options.workers[0].config.manifest.modules['index.js'].contents += '\n// restart fixture';
     await mf.setOptions(options);
   } };
