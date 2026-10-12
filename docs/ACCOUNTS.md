@@ -11,8 +11,11 @@ Phase 2 (later): a background queue — paste URLs, leave, and briefs land in th
 library as unread. It must feed jobs through the existing `Coordinator` (never
 around it) and is capped at **50 videos per user per day**.
 
-Deferred: email verification and password reset (they need Cloudflare Email
-Sending on `ytdw.fyi`), account deletion, OAuth.
+Phase 1b (see "Email, recovery, and account management" below): email
+verification, password reset, change password, delete account.
+
+Deferred: OAuth, full signup-side account-existence hiding (explicitly declined:
+it would remove instant signup; see Phase 1b enumeration notes).
 
 ## Storage: D1
 
@@ -99,3 +102,96 @@ returns 401.
   to read it with the existing brief rendering, plus Mark as read / Mark unread,
   Delete (with confirmation), Copy, and Watch on YouTube. Opening an item does
   not mark it read automatically. Includes empty states.
+
+## Email, recovery, and account management (Phase 1b)
+
+All alias hosts already 301/308 to `https://ytdw.fyi`, so sessions exist on one
+host only.
+
+### Email delivery
+
+Cloudflare Email Sending is enabled for `ytdw.fyi` (SPF/DKIM/DMARC records are in
+place). Binding: `send_email: [{ name: "EMAIL", allowed_sender_addresses:
+["noreply@ytdw.fyi"] }]`, sent with `env.EMAIL.send({ from: { email:
+"noreply@ytdw.fyi", name: "YT;DW" }, to, subject, text, html })`. Every message has
+a plain-text and a minimal HTML part, contains no user-supplied text, and builds
+links from the constant origin `https://ytdw.fyi` (never the request `Host`).
+Send failures are logged (`email_send_failed`, no address in logs) and never
+change the API response, so they cannot reveal anything.
+
+Per-address throttle: at most 3 emails per address per rolling hour across all
+kinds; extra sends are skipped silently.
+
+### Schema (migration `0002`)
+
+```sql
+ALTER TABLE users ADD COLUMN email_verified_at INTEGER;  -- NULL until verified
+auth_tokens(token_hash TEXT PK /* SHA-256 hex */, user_id TEXT FK ON DELETE CASCADE,
+            purpose TEXT /* 'verify' | 'reset' */, created_at INTEGER, expires_at INTEGER)
+email_log(email TEXT /* normalized */, kind TEXT, sent_at INTEGER)  -- throttle; prune rows > 1 day old
+```
+
+Tokens: 32 random bytes, base64url, single-use (deleted on use). Verify links
+last 24 hours, reset links 1 hour. Issuing a token deletes that user's earlier
+tokens of the same purpose.
+
+### Behaviour
+
+- **Signup** stays instant (session issued as before) and sends a verification
+  email. Unverified accounts can use the library; Phase 2 queueing will require
+  a verified email.
+- **Duplicate signup** still returns 409, now with "An account with this email
+  already exists. Sign in or reset your password.", and emails the owner a
+  notice ("someone tried to create an account with your address") with a reset
+  link. (Accepted enumeration trade-off: Turnstile + per-IP limits prevent bulk
+  probing; login and forgot-password stay non-revealing.)
+- **Forgot password** always returns the same 202, whether or not the account
+  exists.
+- **Reset password** sets the new password, marks the email verified (the user
+  proved inbox ownership, which also resolves squatting), deletes **all**
+  sessions and reset tokens for the user, then starts a fresh session.
+- **Change password** requires the current password, revokes all *other*
+  sessions, and keeps the current one.
+- **Delete account** requires the current password, deletes the user (cascade
+  removes sessions, tokens, and saved briefs), and clears the cookie.
+- Pages `/verify` and `/reset-password` are app-shell routes (served like
+  `/library`, `no-store`, plus `referrer-policy: no-referrer` because the token is
+  in the query). The client reads the token, immediately removes it from the URL
+  with `history.replaceState`, and only acts on a POST: verify posts
+  automatically; reset waits for the new-password form.
+- `/account` is an app-shell route for signed-in settings.
+
+### API additions
+
+Same conventions as above (JSON, guards, `no-store`, `{ error }`).
+Turnstile-gated routes use action `auth` and run `AUTH_RATE_LIMIT` first.
+
+| Method & path | Auth | Body | Success |
+| --- | --- | --- | --- |
+| `GET /api/auth/me` | — | — | `200 { user: { email, emailVerified: boolean } \| null }` (adds `emailVerified`) |
+| `POST /api/auth/verify` | — | `{ token }` | `200 { user }`; invalid/expired/used → 400 "This link is invalid or has expired." |
+| `POST /api/auth/verify/resend` | session | `{}` | `202 {}` (throttled silently; already verified → `200 { user }`) |
+| `POST /api/auth/password/forgot` | Turnstile | `{ email, turnstileToken }` | always `202 { message: "If that address has an account, we've sent a link to reset the password." }` |
+| `POST /api/auth/password/reset` | — | `{ token, password }` | `200 { user }` + new session cookie; bad token → 400 as above; password rules as signup |
+| `POST /api/auth/password/change` | session | `{ currentPassword, newPassword }` | `200 { user }`; wrong current → 403 "Current password is incorrect." |
+| `POST /api/account/delete` | session | `{ password }` | `204`, cookie cleared; wrong password → 403 "Password is incorrect." |
+
+`/api/account/*` must also be routed; `/api/*` already runs the Worker first.
+
+### UI additions
+
+- **Verify banner** (signed in, unverified): "Verify your email to keep your
+  account recoverable." with **Resend email** (shows "Sent — check your inbox").
+  Shown on the main, library, and account views; not dismissable permanently.
+- **Auth dialog**: "Forgot password?" link in sign-in mode opens a forgot mode
+  (email + Turnstile) that always ends with the generic confirmation. The 409
+  duplicate-signup error offers inline **Sign in** and **Reset password** actions.
+- **/verify**: shows progress, then success ("Email verified" + continue to
+  library) or the invalid-link message with a resend option if signed in.
+- **/reset-password**: new-password form (with `autocomplete="new-password"`);
+  on success the user is signed in and taken to the library. An invalid link
+  offers to request a new one.
+- **/account** (account menu → "Account"): email + verification status, Change
+  password form (current + new), and a Delete account section (danger styling,
+  password required, plus a confirmation dialog explaining all saved briefs are
+  removed). Signed out → prompt to sign in.
