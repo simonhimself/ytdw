@@ -1,5 +1,17 @@
 # YT;DW Test Results
 
+## Queue review fixes: orphaned rows and menu focus — October 12, 2026
+
+Branch `claude/project-thread-prqta6`; checks Q7 and Q9 in `TEST_PLAN.md`.
+
+- `npm run typecheck` and `git diff --check`: passed.
+- `npm test`: 58 passed (1 new). The new orphaned-row test fails on the previous
+  runner (no alarm scheduled) and passes with the fix.
+- `npm run test:ui`: 280 passed, 8 skipped (4 new runs). The new polling-focus test
+  and the updated Retry/Remove focus checks fail on the previous `app.js`.
+- `npm run test:integration`: 10 passed, 2 skipped.
+- Not yet checked by hand on a Preview or deployed.
+
 ## Single-bar spinner and signed-out prompts production release — October 12, 2026
 
 - Owner reviewed on Preview `feat-queue-single-bar-spinner` and approved; merged as
