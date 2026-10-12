@@ -794,8 +794,18 @@
       failed ? `${failed} failed` : "",
     ].filter(Boolean).join(", "));
     byId("queue-quota").textContent = queueQuota ? `${queueQuota.remaining} of ${queueQuota.limit} left today` : "";
-    byId("queue-list").replaceChildren(...(live ? [liveRow(live)] : []), ...queueItems.map((item) => {
+    // Polling re-renders every few seconds: leave the rows alone when nothing changed, so
+    // keyboard focus and screen-reader position survive.
+    const list = byId("queue-list");
+    const rendered = JSON.stringify([live?.videoId ?? null, live ? 1 : 0, queueItems.map((item) => [item.id, item.status, item.error, item.retryable])]);
+    if (rendered === list.dataset.rendered) return;
+    list.dataset.rendered = rendered;
+    const focused = list.contains(document.activeElement) ? document.activeElement : null;
+    const focusedRow = focused?.closest("li");
+    const focusedIndex = focusedRow ? [...list.children].indexOf(focusedRow) : -1;
+    list.replaceChildren(...(live ? [liveRow(live)] : []), ...queueItems.map((item) => {
       const li = document.createElement("li");
+      li.dataset.id = item.id;
       const main = document.createElement("span");
       main.className = "queue-item__main";
       const video = document.createElement("a");
@@ -804,6 +814,7 @@
       video.target = "_blank";
       video.rel = "noopener noreferrer";
       video.textContent = `youtu.be/${item.videoId}`;
+      video.dataset.action = "open";
       const state = document.createElement("span");
       state.className = `queue-item__state${item.status === "failed" ? " is-failed" : ""}`;
       state.textContent = queueStateText(item);
@@ -815,11 +826,23 @@
       li.append(main, actions);
       return li;
     }));
+    if (focused) restoreQueueFocus(focusedRow?.dataset.id, focused.dataset.action, focusedIndex);
+  }
+
+  // Same control on the same item; else that item's link; else the row now in that
+  // place (never its Remove, so a repeated Enter cannot delete a second item).
+  function restoreQueueFocus(id, action, index) {
+    const list = byId("queue-list");
+    const row = [...list.children].find((li) => id && li.dataset.id === id);
+    const fallback = row ?? list.children[Math.min(index, list.children.length - 1)];
+    const target = row?.querySelector(`[data-action="${action}"]`) ?? fallback?.querySelector("a") ?? byId("queue-summary");
+    target.focus();
   }
 
   // The single-bar video runs in this page's request, so it has no Retry or Remove.
   function liveRow(live) {
     const li = document.createElement("li");
+    li.dataset.id = "live";
     const main = document.createElement("span");
     main.className = "queue-item__main";
     const video = document.createElement(live.videoId ? "a" : "span");
@@ -830,6 +853,7 @@
       video.rel = "noopener noreferrer";
     }
     video.textContent = live.videoId ? `youtu.be/${live.videoId}` : "This video";
+    video.dataset.action = "open";
     const state = document.createElement("span");
     state.className = "queue-item__state";
     state.textContent = "Summarizing on this page…";
@@ -843,6 +867,7 @@
     button.type = "button";
     button.textContent = label;
     button.setAttribute("aria-label", `${label} youtu.be/${item.videoId}`);
+    button.dataset.action = action;
     button.addEventListener("click", () => void runQueueAction(button, item, action));
     return button;
   }
@@ -924,10 +949,10 @@
       announceAccount(requestFailureMessage(requestError, "That didn’t work. Please try again."));
     }
     await loadQueue();
-    if (!queueMenu.hidden && queueMenu.open) {
-      // The row was re-rendered; keep keyboard focus inside the menu.
-      (queueMenu.querySelector(".queue-item__actions button") ?? byId("queue-summary")).focus();
-    } else if (queueMenu.hidden) {
+    // Still here when the list did not change (for example after an error).
+    button.removeAttribute("aria-disabled");
+    // A re-render keeps focus in the menu (restoreQueueFocus); an unchanged list keeps the button.
+    if (queueMenu.hidden) {
       (isHomeView ? input : libraryLink).focus();
     }
   }
