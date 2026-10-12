@@ -5,7 +5,8 @@
 Branch `feat/queue-single-bar-spinner`; check Q9b in `TEST_PLAN.md`.
 
 - `npm run typecheck` and `git diff --check`: passed.
-- `npm run test:ui`: 272 passed, 8 skipped (16 new runs).
+- `npm run test:ui`: 276 passed, 8 skipped (20 new runs), including the signed-out
+  queue link and save hint.
 - `npm run test:integration`: 10 passed, 2 skipped.
 - Visual check of the menu with a running single-bar summary and of the several-links
   hint at desktop (light) and mobile (dark).

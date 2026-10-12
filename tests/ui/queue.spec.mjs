@@ -17,14 +17,30 @@ const noHorizontalScroll = page => page.evaluate(() => document.documentElement.
 // The library page only polls while the tab is visible; tests trigger the check directly.
 const recheck = page => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
-test('the queue link and header menu only exist for signed-in users, and the home page stays clean', async ({ page }) => {
+test('signed out, the queue link invites sign-up; the header menu only exists for signed-in users', async ({ page }) => {
   const account = await mockAccount(page);
   await mockQueue(page, account);
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeVisible();
-  await expect(page.locator('#queue-toggle')).toBeHidden();
   await expect(page.locator('#queue-box')).toBeHidden();
   await expect(page.locator('#queue-menu')).toBeHidden();
+  const open = page.getByRole('button', { name: 'Queue several videos' });
+  await open.click();
+  const dialog = page.getByRole('dialog', { name: 'Create account' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('#auth-lede')).toHaveText('Create an account to queue several videos. Their briefs land in your library.');
+  await page.keyboard.press('Escape');
+  await expect(open).toBeFocused();
+  // Signing up continues into the box; new accounts must verify before queuing.
+  await open.click();
+  await dialog.getByLabel('Email').fill('new@example.com');
+  await dialog.getByLabel('Password').fill('correct horse battery');
+  await dialog.getByRole('button', { name: 'Create account' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('#queue-box')).toBeVisible();
+  await expect(page.getByLabel('Queue several videos')).toBeDisabled();
+  await expect(page.locator('#queue-left')).toHaveText('Verify your email to queue videos.');
+  expect(await noHorizontalScroll(page)).toBe(true);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
   await setupPage(page, test.info());
@@ -35,10 +51,29 @@ test('the queue link and header menu only exist for signed-in users, and the hom
   // Nothing pending: no header menu, and the box is closed.
   await expect(page.locator('#queue-menu')).toBeHidden();
   await expect(page.locator('#queue-box')).toBeHidden();
-  expect(await noHorizontalScroll(page)).toBe(true);
   // Other pages have no queue box or link.
   await page.goto('/library');
   await expect(page.locator('#queue-toggle')).toBeHidden();
+});
+
+test('signed out, a finished brief invites signing in to save it', async ({ page }) => {
+  const account = await mockAccount(page);
+  await mockQueue(page, account);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean(window.__verification))).toBe(true);
+  await page.getByLabel('YouTube URL', { exact: true }).fill(`https://www.youtube.com/watch?v=${ids[0]}`);
+  await page.getByRole('button', { name: 'Summarize', exact: true }).click();
+  await expect(page.locator('#result-title')).toHaveText('First video brief');
+  const hint = page.locator('#save-hint');
+  await expect(hint).toHaveText('Sign in to save this brief and read it later.');
+  await hint.getByRole('button', { name: 'Sign in' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Sign in' });
+  await dialog.getByLabel('Email').fill('reader@example.com');
+  await dialog.getByLabel('Password').fill('correct horse battery');
+  await dialog.getByRole('button', { name: 'Sign in' }).click();
+  // Signing in from the hint saves the brief, like the Save button does.
+  await expect(page.locator('#save-button')).toHaveText('Saved');
+  await expect(hint).toBeHidden();
 });
 
 test('the box opens on demand, counts lines, and closes with Cancel or Escape', async ({ page }) => {
@@ -202,7 +237,8 @@ test('the header menu closes on outside clicks and is gone after sign-out', asyn
   await page.locator('#account-menu summary').click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.locator('#queue-menu')).toBeHidden();
-  await expect(page.locator('#queue-toggle')).toBeHidden();
+  // Signed out, the link stays as an invitation to create an account.
+  await expect(page.getByRole('button', { name: 'Queue several videos' })).toBeVisible();
 });
 
 test('a single-bar summary shows in the header menu while it runs', async ({ page }) => {
@@ -268,6 +304,6 @@ test('signed-out visitors with several links are asked to sign in', async ({ pag
   await page.goto('/');
   await page.getByLabel('YouTube URL', { exact: true }).fill(`${link(ids[0])}${link(ids[1])}`);
   await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Sign in to queue them' }).click();
-  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign up to queue them' }).click();
+  await expect(page.getByRole('dialog', { name: 'Create account' })).toBeVisible();
 });
