@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -114,13 +114,15 @@ export default { async fetch(request, env) {
     MIGRATION_TARGET: legacy ? 'https://ytdw.fyi' : undefined,
     REQUEST_RATE_LIMIT:limit('request'),CLIENT_RATE_LIMIT:limit('client'),GLOBAL_RATE_LIMIT:limit('global'),
     SHARE_READ_RATE_LIMIT:limit('share-client'),SHARE_GLOBAL_RATE_LIMIT:limit('share-global'),
+    AUTH_RATE_LIMIT:limit('auth'),LIBRARY_RATE_LIMIT:limit('library'),
     COORDINATOR:{idFromName:()=>scope,get:()=>namespace.getByName(scope)},Sandbox:{exec},
   });
 } };
 `;
   const bundled = await build({ stdin: { contents: fixture, resolveDir: root, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', external: ['cloudflare:*'], plugins: [{ name: 'fixture', setup(builder) {
     builder.onResolve({ filter: /^production-worker$/ }, () => ({ path: 'production', namespace: 'fixture' }));
-    builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: testSource, loader: 'ts', resolveDir: root }));
+    // The patched index.ts imports sibling modules (./auth, ./http, ...) from src/.
+    builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: testSource, loader: 'ts', resolveDir: `${root}src` }));
     builder.onResolve({ filter: /^@cloudflare\/sandbox$/ }, () => ({ path: 'sandbox', namespace: 'mock' }));
     builder.onResolve({ filter: /youtube-browser$/ }, () => ({ path: 'browser', namespace: 'mock' }));
     builder.onLoad({ filter: /.*/, namespace: 'mock' }, (args) => ({ loader: 'js', contents: args.path === 'browser'
@@ -137,11 +139,12 @@ export default { async fetch(request, env) {
     env: {
       COORDINATOR: { type: 'durable-object', worker: 'test-ytdw', exportName: 'Coordinator' },
       SHARED_BRIEFS: { type: 'durable-object', worker: 'test-ytdw', exportName: 'SharedBrief' },
+      DB: { type: 'd1', id: 'ytdw-test' },
       ASSETS: { type: 'assets' }, TURNSTILE_SITEKEY: { type: 'text', value: 'fixture-sitekey' },
       TURNSTILE_SECRET: { type: 'text', value: 'fixture-secret' }, TURNSTILE_HOSTNAMES: { type: 'text', value: 'localhost' },
       TEST_TOKEN: { type: 'text', value: 'fixture-diagnostic-token' },
     },
-    assets: { directory: `${root}/public`, hasUserWorker: true, runWorkerFirst: ['/api/*', '/s/*', '/__*'] },
+    assets: { directory: `${root}/public`, hasUserWorker: true, runWorkerFirst: ['/api/*', '/s/*', '/library', '/__*'] },
   }, dev: { outboundService: { type: 'fetcher', handler: async (request) => {
     const url = new URL(request.url);
     if (url.hostname === 'www.youtube.com' && url.pathname === '/api/timedtext') {
@@ -153,10 +156,19 @@ export default { async fetch(request, env) {
     }
     if (!request.url.includes('/turnstile/v0/siteverify')) throw new Error('Unexpected outbound request');
     verifications++;
-    return Response.json({ success: true, action: 'summarize', hostname: 'localhost' });
+    // Tokens named for auth return the auth action; every other token is a summarize token.
+    const token = new URLSearchParams(await request.text()).get('response') ?? '';
+    return Response.json({ success: true, action: token.startsWith('fixture-auth') ? 'auth' : 'summarize', hostname: 'localhost' });
   } } } }] };
   const mf = new Miniflare(options);
   await mf.ready;
+  // Apply the real D1 migrations, as `wrangler d1 migrations apply` would.
+  const db = await mf.getD1Database('DB', 'test-ytdw');
+  const migrations = new URL('../migrations/', import.meta.url);
+  for (const file of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) {
+    const statements = (await readFile(new URL(file, migrations), 'utf8')).replace(/^--.*$/gm, '').split(';').map(s => s.trim()).filter(Boolean);
+    await db.batch(statements.map(sql => db.prepare(sql)));
+  }
   const request = (path, init = {}) => mf.dispatchFetch(`http://localhost${path}`, init);
   const control = async (action, id, scope = 'global') => (await request('/__control', { method: 'POST', headers: { 'x-test-scope': scope }, body: JSON.stringify({ action, id }) })).json();
   const post = (id, scope = 'global', headers = {}) => request('/api/summarize', { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-scope': scope, ...headers }, body: JSON.stringify({ url: `https://youtu.be/${id}`, turnstileToken: 'fixture-token' }) });

@@ -1,5 +1,8 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { DurableObject } from "cloudflare:workers";
+import { handleAuth } from "./auth";
+import { BadRequestError, SHARE_ID, readJsonObject, verifyTurnstile } from "./http";
+import { handleLibrary } from "./library";
 import { fetchPlayerResponse, type BrowserPlayerResponse } from "./youtube-browser";
 
 export { Sandbox } from "@cloudflare/sandbox";
@@ -17,12 +20,10 @@ const BROWSER_TIMEOUT_MS = 30_000;
 // (https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). Switching clients did
 // not fix caption 429s on its own; see fetchCaptions.
 const YTDLP_CLIENT_ARGS = '--extractor-args "youtube:player_client=android_vr"';
-const MAX_REQUEST_BYTES = 8_192;
 const MAX_VIDEO_SECONDS = 21_600;
 const MAX_TRANSCRIPT_CHARACTERS = 400_000;
 const MAX_CAPTION_BYTES = 2_097_152;
 const SHARE_TTL_MS = 24 * 60 * 60 * 1000;
-const SHARE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHARE_HEADERS = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" };
 const PROCESSING_TIMEOUT_MS = 6 * 60 * 1000;
 const MAX_QUEUE_WAIT_MS = 90_000;
@@ -37,8 +38,6 @@ const SECURITY_HEADERS = {
   "referrer-policy": "strict-origin-when-cross-origin",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
 };
-
-class BadRequestError extends Error {}
 
 class UncertainExecutionError extends Error {
   constructor(message: string, readonly recoverUntil: number) { super(message); }
@@ -69,12 +68,6 @@ interface VideoMetadata {
 
 interface ExtractedVideoMetadata extends VideoMetadata {
   captionUrl: string | null;
-}
-
-interface TurnstileResult {
-  success: boolean;
-  action?: string;
-  hostname?: string;
 }
 
 interface SummaryResult extends VideoMetadata {
@@ -428,82 +421,6 @@ function fitTranscript(text: string): { text: string; truncated: boolean } {
   };
 }
 
-async function readJsonBody(request: Request): Promise<unknown> {
-  if (!request.body) throw new BadRequestError("Request body is required");
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_REQUEST_BYTES) {
-      await reader.cancel();
-      throw new BadRequestError("Request body is too large");
-    }
-    chunks.push(value);
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new BadRequestError("Request body must be valid JSON");
-  }
-}
-
-async function verifyTurnstile(
-  request: Request,
-  env: Env & { TURNSTILE_SECRET?: string },
-  token: unknown,
-): Promise<boolean> {
-  const expectedHostnames = new Set(
-    env.TURNSTILE_HOSTNAMES.split(",").map((hostname) => hostname.trim()).filter(Boolean),
-  );
-  if (
-    !env.TURNSTILE_SECRET ||
-    typeof token !== "string" ||
-    token.length === 0 ||
-    token.length > 2048 ||
-    expectedHostnames.size === 0
-  ) {
-    return false;
-  }
-
-  const body = new URLSearchParams({
-    secret: env.TURNSTILE_SECRET,
-    response: token,
-  });
-  const remoteIp = request.headers.get("CF-Connecting-IP");
-  if (remoteIp) body.set("remoteip", remoteIp);
-
-  try {
-    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) return false;
-    const result = (await response.json()) as TurnstileResult;
-    return (
-      result.success === true &&
-      result.action === "summarize" &&
-      typeof result.hostname === "string" &&
-      expectedHostnames.has(result.hostname)
-    );
-  } catch {
-    return false;
-  }
-}
-
 function getAiText(response: unknown, depth = 0): string {
   if (typeof response === "string") return response;
   if (depth > 2 || !response || typeof response !== "object") {
@@ -576,11 +493,9 @@ async function handleSummarize(request: Request, env: Env): Promise<Response> {
   if (!request.headers.get("content-type")?.includes("application/json")) {
     throw new BadRequestError("Expected a JSON request");
   }
-  const parsed = await readJsonBody(request);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new BadRequestError("Request body must be a JSON object");
-  const body = parsed as { url?: unknown; turnstileToken?: unknown };
+  const body = await readJsonObject(request);
   const videoUrl = normalizeYouTubeUrl(body.url);
-  if (!(await verifyTurnstile(request, env, body.turnstileToken))) {
+  if (!(await verifyTurnstile(request, env, body.turnstileToken, "summarize"))) {
     return Response.json({ error: "Verification failed. Please try again." }, { status: 403 });
   }
 
@@ -889,13 +804,16 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
       if (request.method === "GET" && requestUrl.pathname.startsWith("/api/shares/")) {
         return handleSharedBrief(request, requestUrl.pathname.slice("/api/shares/".length), env);
       }
-      if ((request.method === "GET" || request.method === "HEAD") && requestUrl.pathname.startsWith("/s/")) {
+      // Both routes are client-rendered views of the app shell.
+      if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/s/") || requestUrl.pathname === "/library")) {
         const shellUrl = new URL("/", request.url);
         const shell = await env.ASSETS.fetch(new Request(shellUrl, { method: request.method }));
         const response = new Response(shell.body, shell);
         for (const [name, value] of Object.entries(SHARE_HEADERS)) response.headers.set(name, value);
         return response;
       }
+      if (requestUrl.pathname.startsWith("/api/auth/")) return await handleAuth(request, env);
+      if (requestUrl.pathname === "/api/library" || requestUrl.pathname.startsWith("/api/library/")) return await handleLibrary(request, env);
       if (request.method === "POST" && requestUrl.pathname === "/api/summarize") {
         return await handleSummarize(request, env);
       }

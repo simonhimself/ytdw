@@ -18,11 +18,26 @@
     <a class="wordmark wordmark--small" href="/" aria-label="YT;DW home">
       <span>YT</span><span class="wordmark__semicolon">;</span><span>DW</span>
     </a>
-    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
-      <svg class="theme-toggle__sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.25"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.35 4.35l1.42 1.42M14.23 14.23l1.42 1.42M15.65 4.35l-1.42 1.42M5.77 14.23l-1.42 1.42"/></svg>
-      <svg class="theme-toggle__moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 12.35A6.75 6.75 0 0 1 7.65 3.8a6.75 6.75 0 1 0 8.55 8.55Z"/></svg>
-    </button>
+    <div class="header-actions">
+      <a id="library-link" class="header-link" href="/library" hidden>Library<span id="library-badge" class="count-badge" aria-hidden="true" hidden></span></a>
+      <button id="sign-in-button" class="header-button" type="button" hidden>Sign in</button>
+      <details id="account-menu" class="account-menu" hidden>
+        <summary aria-label="Account menu">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.25"/><path d="M3.5 17c.6-3 3.1-4.75 6.5-4.75s5.9 1.75 6.5 4.75"/></svg>
+        </summary>
+        <div class="account-popover">
+          <p class="account-popover__label">Signed in as</p>
+          <p id="account-email" class="account-popover__email"></p>
+          <button id="sign-out-button" class="copy-button" type="button">Sign out</button>
+        </div>
+      </details>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+        <svg class="theme-toggle__sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.25"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.35 4.35l1.42 1.42M14.23 14.23l1.42 1.42M15.65 4.35l-1.42 1.42M5.77 14.23l-1.42 1.42"/></svg>
+        <svg class="theme-toggle__moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 12.35A6.75 6.75 0 0 1 7.65 3.8a6.75 6.75 0 1 0 8.55 8.55Z"/></svg>
+      </button>
+    </div>
   </header>
+  <p id="account-status" class="sr-only" role="status" aria-atomic="true"></p>
 
   <main class="app-main">
     <section class="workspace" aria-labelledby="page-title">
@@ -64,7 +79,37 @@
         <span id="error-message"></span>
       </div>
 
+      <section id="library" class="library" hidden aria-labelledby="library-title">
+        <div id="library-list-view">
+          <div class="library__head">
+            <h1 id="library-title" class="library__title" tabindex="-1">Library</h1>
+            <a class="result-link" href="/">Summarize a video &rarr;</a>
+          </div>
+          <div class="library-tabs" role="group" aria-label="Filter saved briefs">
+            <button id="tab-unread" class="library-tab" type="button" data-filter="unread" aria-pressed="true">Unread <span class="library-tab__count"></span></button>
+            <button id="tab-all" class="library-tab" type="button" data-filter="all" aria-pressed="false">All <span class="library-tab__count"></span></button>
+          </div>
+          <p id="library-status" class="sr-only" role="status" aria-atomic="true"></p>
+          <ul id="library-list" class="library-list"></ul>
+          <div id="library-empty" class="library-empty" hidden>
+            <strong id="library-empty-title"></strong>
+            <p id="library-empty-detail"></p>
+          </div>
+        </div>
+        <div id="library-signed-out" class="library-empty" hidden>
+          <strong id="library-signed-out-title">Sign in to see your library</strong>
+          <p id="library-signed-out-detail">Saved briefs live in your account, ready to read later.</p>
+          <button id="library-sign-in" class="copy-button" type="button">Sign in</button>
+        </div>
+        <div id="library-error" class="error" role="alert" hidden>
+          <strong id="library-error-title"></strong>
+          <span id="library-error-message"></span>
+          <a class="result-link" href="/library" data-library-nav>Back to library</a>
+        </div>
+      </section>
+
       <article id="result" class="result" tabindex="-1" hidden>
+        <a id="library-back" class="back-link" href="/library" data-library-nav hidden>&larr; Back to library</a>
         <p id="previous-result-note" class="share-note" hidden>Your previous brief stays available below.</p>
         <header class="result__header">
           <div>
@@ -75,8 +120,15 @@
           <div class="result__actions">
             <button id="copy-button" class="copy-button" type="button">Copy</button>
             <button id="share-button" class="copy-button" type="button" disabled>Share</button>
+            <button id="save-button" class="copy-button" type="button" disabled>Save</button>
+            <button id="read-button" class="copy-button" type="button" hidden>Mark as read</button>
+            <button id="delete-button" class="copy-button copy-button--danger" type="button" hidden>Delete</button>
           </div>
         </header>
+        <p id="library-meta" class="share-note" hidden></p>
+        <p id="save-note" class="share-note" hidden>Saved to your library. <a href="/library">Open library</a></p>
+        <p id="save-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
+        <p id="item-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
         <p id="share-expiry" class="share-note" hidden></p>
         <p id="copy-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
         <div id="copy-fallback" hidden>
@@ -114,6 +166,42 @@
       </div>
     </details>
   </footer>
+
+  <dialog id="auth-dialog" class="dialog" aria-labelledby="auth-title">
+    <form id="auth-form" class="dialog__form" novalidate>
+      <div class="dialog__head">
+        <h2 id="auth-title" class="dialog__title">Sign in</h2>
+        <button id="auth-close" class="dialog__close" type="button" aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+        </button>
+      </div>
+      <p id="auth-lede" class="dialog__lede">Save briefs and read them later.</p>
+      <div class="field">
+        <label for="auth-email">Email</label>
+        <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254" required>
+      </div>
+      <div class="field">
+        <label for="auth-password">Password</label>
+        <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="256" required aria-describedby="auth-hint">
+        <p id="auth-hint" class="field__hint" hidden>At least 8 characters.</p>
+      </div>
+      <p id="auth-error" class="dialog__error" role="alert" hidden></p>
+      <div id="auth-turnstile" class="turnstile"></div>
+      <button id="auth-submit" class="dialog__submit" type="submit">Sign in</button>
+      <p class="dialog__switch"><span id="auth-switch-prompt">New here?</span> <button id="auth-switch" class="link-button" type="button">Create an account</button></p>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog dialog--narrow" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
+    <div class="dialog__form">
+      <h2 id="confirm-title" class="dialog__title">Delete this brief?</h2>
+      <p id="confirm-detail" class="dialog__lede"></p>
+      <div class="dialog__actions">
+        <button id="confirm-cancel" class="copy-button" type="button">Cancel</button>
+        <button id="confirm-delete" class="copy-button copy-button--danger" type="button">Delete</button>
+      </div>
+    </div>
+  </dialog>
 
 </body>
 </html>

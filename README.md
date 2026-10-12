@@ -113,6 +113,8 @@ Chromium with `npx playwright install chromium`. You can also set
 | File | Purpose |
 | --- | --- |
 | [`src/index.ts`](src/index.ts) | Worker API, transcript processing, caching, and Durable Objects |
+| [`src/auth.ts`](src/auth.ts), [`src/library.ts`](src/library.ts) | Accounts, sessions, and the saved-brief library (D1) |
+| [`docs/ACCOUNTS.md`](docs/ACCOUNTS.md) | Accounts and library spec and API contract |
 | [`public/`](public/) | UI markup, behavior, and light/dark themes |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Deployment, service limits, maintenance, and migration history |
 | [`TEST_PLAN.md`](TEST_PLAN.md) | Validation scope and manual checks |

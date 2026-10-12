@@ -5,3 +5,4 @@ try {
   document.documentElement.dataset.mode = "light";
 }
 if (location.pathname.startsWith("/s/")) document.documentElement.dataset.view = "shared";
+else if (location.pathname === "/library") document.documentElement.dataset.view = "library";

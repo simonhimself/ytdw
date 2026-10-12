@@ -1,37 +1,9 @@
 import { test, expect } from '@playwright/test';
 
-const videoA = 'https://www.youtube.com/watch?v=38vwjWpHFes';
-const videoB = 'https://www.youtube.com/watch?v=PJrntzMA4iQ';
-const markdown = '## Summary: A useful subject\n\nFirst overview paragraph.\n\n## Key Points\n### Details\n1. **First:** Keep this number.\n2. **Second:** Keep this paragraph boundary.';
-const makeBrief = (url = videoA) => ({
-  id: new URL(url).searchParams.get('v'), title: url === videoA ? 'First video brief' : 'Second video brief', uploader: 'Example channel', duration: 480,
-  summary: markdown, transcriptTruncated: false,
-  share: { url: '/s/75aad086-16f5-47f3-a449-9a3fd1d2e878', expiresAt: Date.now() + 86400000 },
-});
+import { videoA, videoB, markdown, makeBrief, setupPage } from './helpers.mjs';
 
 test.beforeEach(async ({ page }, info) => {
-  await page.addInitScript(({ dark }) => {
-    localStorage.setItem('ytdw-theme', dark ? 'dark' : 'light');
-    window.__copies = [];
-    window.__executeCount = 0;
-    window.__autoVerify = true;
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => {
-      if (window.__deferClipboard) await new Promise((resolve, reject) => { window.__pendingClipboard = { resolve, reject }; });
-      if (window.__denyClipboard) throw new Error('Clipboard blocked');
-      window.__copies.push(text);
-    } } });
-  }, { dark: info.project.name.endsWith('dark') });
-  await page.route('**/api/config', route => route.fulfill({ json: { turnstileSitekey: 'test-key' } }));
-  await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?*', route => route.fulfill({ contentType: 'application/javascript', body: `
-    window.turnstile = {
-      render(selector, callbacks) { window.__verification = callbacks; return 1; },
-      execute() { window.__executeCount++; if (window.__autoVerify) setTimeout(() => window.__verification.callback('test-token'), 10); },
-      reset() {}
-    };
-    window.onTurnstileLoad();
-  ` }));
-  await page.route('**/api/summarize', route => route.fulfill({ json: makeBrief(route.request().postDataJSON().url) }));
-  await page.route('**/api/shares/*', route => route.fulfill({ json: makeBrief() }));
+  await setupPage(page, info);
 });
 
 async function generate(page, url = videoA) {

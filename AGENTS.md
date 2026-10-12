@@ -9,6 +9,9 @@ application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 
 - `src/index.ts` contains the Worker API, transcript processing, caching, and
   Durable Object coordination.
+- `src/auth.ts` (email/password accounts, sessions) and `src/library.ts` (saved
+  briefs) store data in D1 (`DB`, schema in `migrations/`); `src/http.ts` holds
+  shared request/response helpers. `docs/ACCOUNTS.md` is the spec and API contract.
 - `public/index.html` contains the single-page UI structure.
 - `public/app.js` contains client behavior; `public/theme.js` sets the initial theme.
 - `public/styles.css` contains the Kumo-based light and dark themes.
@@ -21,8 +24,8 @@ application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 - `wrangler.jsonc` is the source of truth for Cloudflare bindings and deployment.
 - `wrangler.legacy.jsonc` is historical only; its deployment was retired on 2026-09-18.
 
-The Worker uses Cloudflare Workers, Browser Rendering, Sandbox, Durable Objects, Workers AI,
-Turnstile, rate limits, static assets, and the Cache API.
+The Worker uses Cloudflare Workers, Browser Rendering, Sandbox, Durable Objects, D1,
+Workers AI, Turnstile, rate limits, static assets, and the Cache API.
 
 ## Commands
 
@@ -32,6 +35,7 @@ npm run cf-typegen
 npm run typecheck
 npm test
 npm run test:ui
+npm run test:integration   # real Worker + local D1 driven by Chromium
 npm run dev
 ```
 

@@ -35,6 +35,25 @@ Verify the primary hostname after deployment. `/health` is protected by
 `TEST_TOKEN`. The former `/metadata` and `/captions` execution endpoints are
 retired so extraction cannot bypass the coordinated queue.
 
+## Accounts database (D1)
+
+Accounts, sessions, and saved briefs live in the D1 database `ytdw` (binding
+`DB`, schema in `migrations/`, spec in [`ACCOUNTS.md`](ACCOUNTS.md)). First-time
+setup, in this order — deploying before the remote migration makes signup fail
+until the tables exist:
+
+```bash
+npx wrangler d1 create ytdw            # put the returned id in wrangler.jsonc (replaces the placeholder)
+npx wrangler d1 migrations apply ytdw --remote
+npx wrangler deploy --profile default --containers-rollout=none
+```
+
+Apply new files in `migrations/` with the same `--remote` command before
+deploying code that depends on them. The `__Host-ytdw_session` cookie is
+host-only, so a session on `ytdw.fyi` does not carry over to `www.ytdw.fyi` or
+`ytdw.simons.workers.dev`. After the first deployment, check sign-up in a real
+browser first: local tests mock the Turnstile widget for the `auth` action.
+
 ## Sharing and retention
 
 After generating a brief, **Share** checks that its snapshot is still available,

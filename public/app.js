@@ -1,6 +1,7 @@
 (() => {
   const byId = (id) => document.getElementById(id);
   const isSharedView = location.pathname.startsWith("/s/");
+  const isLibraryView = location.pathname === "/library";
   const form = byId("summary-form");
   const input = byId("youtube-url");
   const submitButton = byId("submit-button");
@@ -11,7 +12,11 @@
   const stackDetails = byId("cloudflare-stack");
   const shareButton = byId("share-button");
   const copyButton = byId("copy-button");
+  const saveButton = byId("save-button");
+  const readButton = byId("read-button");
+  const deleteButton = byId("delete-button");
   let currentResult = null;
+  let currentLibraryItem = null;
   let phase = "idle";
   let submittedUrl = "";
   let widgetId;
@@ -79,42 +84,61 @@
     if (window.turnstile && widgetId !== undefined) window.turnstile.reset(widgetId);
   }
 
+  // One shared load of the sitekey config and Turnstile script. The summarize widget
+  // renders on the landing page; the auth widget renders lazily when the dialog opens,
+  // so shared and library pages never contact Turnstile until someone signs in.
+  let turnstileReady;
+  function loadTurnstile() {
+    turnstileReady ??= (async () => {
+      let sitekey;
+      try {
+        const response = await fetch("/api/config", { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) throw new Error("Configuration unavailable");
+        const config = await response.json();
+        if (typeof config.turnstileSitekey !== "string" || !config.turnstileSitekey) throw new Error("Missing sitekey");
+        sitekey = config.turnstileSitekey;
+      } catch {
+        throw new Error("Verification could not load. Check your connection and reload.");
+      }
+      await new Promise((resolve, reject) => {
+        window.onTurnstileLoad = resolve;
+        const script = document.createElement("script");
+        script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
+        script.onerror = () => reject(new Error("Verification is blocked. Allow challenges.cloudflare.com and reload."));
+        document.head.append(script);
+        window.setTimeout(() => reject(new Error("Verification is unavailable. Check your connection and reload.")), 10_000);
+      });
+      return sitekey;
+    })();
+    // A failed load may be retried (for example when the auth dialog is reopened).
+    turnstileReady.catch(() => { turnstileReady = undefined; });
+    return turnstileReady;
+  }
+
   async function setupVerification() {
     try {
-      const response = await fetch("/api/config", { signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) throw new Error("Configuration unavailable");
-      const config = await response.json();
-      if (typeof config.turnstileSitekey !== "string" || !config.turnstileSitekey) throw new Error("Missing sitekey");
-      window.onTurnstileLoad = () => {
-        widgetId = window.turnstile.render("#turnstile-widget", {
-          sitekey: config.turnstileSitekey,
-          action: "summarize",
-          execution: "execute",
-          appearance: "interaction-only",
-          callback(token) {
-            if (phase !== "verifying") return;
-            showTurnstileError("");
-            void runSummary(submittedUrl, token);
-          },
-          "expired-callback": () => failVerification("Verification expired. Please try again."),
-          "timeout-callback": () => failVerification("Verification timed out. Please try again."),
-          "error-callback": () => {
-            const message = "Verification could not load. Check your connection, allow challenges.cloudflare.com, and retry.";
-            if (phase === "verifying") failVerification(message);
-            else if (phase === "idle") showTurnstileError(message);
-          }
-        });
-        showTurnstileError("");
-      };
-      const script = document.createElement("script");
-      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
-      script.onerror = () => showTurnstileError("Verification is blocked. Allow challenges.cloudflare.com and reload.");
-      document.head.append(script);
-      window.setTimeout(() => {
-        if (widgetId === undefined) showTurnstileError("Verification is unavailable. Check your connection and reload.");
-      }, 10_000);
-    } catch {
-      showTurnstileError("Verification could not load. Check your connection and reload.");
+      const sitekey = await loadTurnstile();
+      widgetId = window.turnstile.render("#turnstile-widget", {
+        sitekey,
+        action: "summarize",
+        execution: "execute",
+        appearance: "interaction-only",
+        callback(token) {
+          if (phase !== "verifying") return;
+          showTurnstileError("");
+          void runSummary(submittedUrl, token);
+        },
+        "expired-callback": () => failVerification("Verification expired. Please try again."),
+        "timeout-callback": () => failVerification("Verification timed out. Please try again."),
+        "error-callback": () => {
+          const message = "Verification could not load. Check your connection, allow challenges.cloudflare.com, and retry.";
+          if (phase === "verifying") failVerification(message);
+          else if (phase === "idle") showTurnstileError(message);
+        }
+      });
+      showTurnstileError("");
+    } catch (setupError) {
+      showTurnstileError(setupError.message || "Verification could not load. Check your connection and reload.");
     }
   }
 
@@ -221,7 +245,7 @@
     element.textContent = text;
   }
 
-  function showResult(data) {
+  function showResult(data, { libraryItem = null } = {}) {
     // Validate and build the replacement before changing the previous brief.
     if (!data || !/^[A-Za-z0-9_-]{11}$/.test(data.id) || typeof data.title !== "string" ||
         !Number.isFinite(data.duration) || data.duration < 0 || typeof data.summary !== "string" || !data.summary.trim() ||
@@ -232,8 +256,9 @@
     const summaryContent = renderSummary(data.summary);
     const expiryText = data.share
       ? `Share link available until ${new Date(data.share.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Anyone with the link can read and forward it.`
-      : "Sharing is temporarily unavailable. You can still copy this brief.";
+      : "Sharing and saving are temporarily unavailable. You can still copy this brief.";
     currentResult = data;
+    currentLibraryItem = libraryItem;
     byId("result-channel").textContent = data.uploader || "YouTube";
     byId("result-title").textContent = data.title;
     byId("result-duration").textContent = formatDuration(data.duration);
@@ -248,11 +273,19 @@
     copyButton.setAttribute("aria-disabled", "false");
     actionStatus("copy-status", "");
     actionStatus("share-status", "");
+    actionStatus("save-status", "");
+    actionStatus("item-status", "");
     byId("copy-fallback").hidden = true;
     byId("share-fallback").hidden = true;
     byId("previous-result-note").hidden = true;
-    byId("share-expiry").hidden = Boolean(data.share);
+    byId("share-expiry").hidden = Boolean(data.share) || Boolean(libraryItem);
     byId("share-expiry").textContent = expiryText;
+    // Library items reuse this article but swap Share/Save for read-state and delete.
+    for (const button of [shareButton, saveButton]) button.hidden = Boolean(libraryItem);
+    for (const button of [readButton, deleteButton, byId("library-back")]) button.hidden = !libraryItem;
+    byId("library-meta").hidden = !libraryItem;
+    renderSaveButton();
+    if (libraryItem) renderLibraryItemState();
     byId("result-summary").replaceChildren(summaryContent);
     document.title = `${data.title} | YT;DW`;
     document.body.classList.add("has-result");
@@ -404,10 +437,640 @@
     }
   });
 
-  if (isSharedView) void loadSharedBrief();
-  else {
-    input.value = new URLSearchParams(location.search).get("url") || "";
-    setSubmitState();
-    void setupVerification();
+  // ---- Accounts -----------------------------------------------------------------
+
+  const signInButton = byId("sign-in-button");
+  const libraryLink = byId("library-link");
+  const accountMenu = byId("account-menu");
+  const authDialog = byId("auth-dialog");
+  const authForm = byId("auth-form");
+  const authEmail = byId("auth-email");
+  const authPassword = byId("auth-password");
+  const authSubmit = byId("auth-submit");
+  const library = byId("library");
+  let user = null;
+  let accountKnown = false;
+  let libraryCounts = null;
+  // Keyed by brief object so a replacement brief always starts unsaved.
+  let savedBriefs = new WeakSet();
+  let savingInFlight = null;
+
+  function parseUser(value) {
+    return value && typeof value.email === "string" && value.email ? { email: value.email } : null;
+  }
+
+  function apiRequest(path, { method = "GET", body, timeout = 15_000 } = {}) {
+    const init = { method, cache: "no-store", signal: AbortSignal.timeout(timeout) };
+    // The API rejects mutating requests without a JSON content type (CSRF defense), DELETE included.
+    if (method !== "GET") init.headers = { "content-type": "application/json" };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    return fetch(path, init);
+  }
+
+  async function failureMessage(response, fallback) {
+    try {
+      const data = await responseData(response);
+      if (typeof data.error === "string" && data.error) return data.error;
+    } catch {}
+    return fallback;
+  }
+
+  function requestFailureMessage(requestError, fallback) {
+    return requestError.name === "TimeoutError" ? "That took too long. Please try again." : requestError.message || fallback;
+  }
+
+  function announceAccount(text) {
+    byId("account-status").textContent = text;
+  }
+
+  function setCounts(counts) {
+    if (!counts || !Number.isFinite(counts.unread) || !Number.isFinite(counts.all)) return;
+    libraryCounts = { unread: counts.unread, all: counts.all };
+    renderAccount();
+    for (const tab of document.querySelectorAll(".library-tab")) {
+      tab.querySelector(".library-tab__count").textContent = String(libraryCounts[tab.dataset.filter]);
+    }
+  }
+
+  function renderAccount() {
+    signInButton.hidden = !accountKnown || Boolean(user);
+    libraryLink.hidden = !user;
+    accountMenu.hidden = !user;
+    if (!user) accountMenu.open = false;
+    else byId("account-email").textContent = user.email;
+    const unread = libraryCounts?.unread ?? 0;
+    const badge = byId("library-badge");
+    badge.hidden = !user || unread < 1;
+    badge.textContent = unread > 99 ? "99+" : String(unread);
+    libraryLink.setAttribute("aria-label", user && unread > 0 ? `Library, ${unread} unread` : "Library");
+    if (isLibraryView) libraryLink.setAttribute("aria-current", "page");
+  }
+
+  // Header counts come from the unread list endpoint; failures just omit the badge.
+  async function refreshCounts() {
+    if (!user) return;
+    try {
+      const response = await apiRequest("/api/library?filter=unread");
+      if (!response.ok || !user) return;
+      const data = await responseData(response);
+      if (user) setCounts(data.counts);
+    } catch {}
+  }
+
+  function endSession() {
+    user = null;
+    libraryCounts = null;
+    savedBriefs = new WeakSet();
+    renderAccount();
+    renderSaveButton();
+  }
+
+  async function loadAccount() {
+    try {
+      const response = await apiRequest("/api/auth/me", { timeout: 10_000 });
+      if (response.ok) user = parseUser((await responseData(response)).user);
+    } catch {}
+    accountKnown = true;
+    renderAccount();
+    renderSaveButton();
+    if (user && !isLibraryView) void refreshCounts();
+  }
+
+  document.addEventListener("click", (event) => {
+    if (accountMenu.open && !accountMenu.contains(event.target)) accountMenu.open = false;
+  });
+  accountMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && accountMenu.open) {
+      accountMenu.open = false;
+      accountMenu.querySelector("summary").focus();
+    }
+  });
+
+  byId("sign-out-button").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (button.getAttribute("aria-disabled") === "true") return;
+    button.setAttribute("aria-disabled", "true");
+    try {
+      const response = await apiRequest("/api/auth/logout", { method: "POST", body: {} });
+      // 401 means the session is already gone, which is what the user asked for.
+      if (!response.ok && response.status !== 401) throw new Error(await failureMessage(response, "Could not sign out. Please try again."));
+      endSession();
+      announceAccount("Signed out.");
+      if (isLibraryView) showSignedOut(false);
+      signInButton.focus();
+    } catch (requestError) {
+      announceAccount(requestFailureMessage(requestError, "Could not sign out. Please try again."));
+    } finally {
+      button.setAttribute("aria-disabled", "false");
+    }
+  });
+
+  // ---- Auth dialog --------------------------------------------------------------
+
+  let authMode = "signin";
+  let authPhase = "idle";
+  let authOpener = null;
+  let authCredentials = null;
+  let authTimer;
+  let afterAuth = null;
+  let authWidgetId;
+  let authWidgetPromise;
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    const signup = mode === "signup";
+    byId("auth-title").textContent = signup ? "Create account" : "Sign in";
+    byId("auth-lede").textContent = signup ? "Create an account to save briefs and read them later." : "Sign in to save briefs and read them later.";
+    authSubmit.textContent = signup ? "Create account" : "Sign in";
+    byId("auth-switch-prompt").textContent = signup ? "Already have an account?" : "New here?";
+    byId("auth-switch").textContent = signup ? "Sign in" : "Create an account";
+    byId("auth-hint").hidden = !signup;
+    authPassword.autocomplete = signup ? "new-password" : "current-password";
+  }
+
+  function showAuthError(message, field) {
+    const element = byId("auth-error");
+    element.textContent = message;
+    element.hidden = !message;
+    authEmail.removeAttribute("aria-invalid");
+    authPassword.removeAttribute("aria-invalid");
+    if (message && field) {
+      field.setAttribute("aria-invalid", "true");
+      field.focus();
+    }
+  }
+
+  function setAuthPhase(next) {
+    authPhase = next;
+    if (next !== "verifying") clearTimeout(authTimer);
+    const busy = next !== "idle";
+    authForm.setAttribute("aria-busy", String(busy));
+    authEmail.readOnly = busy;
+    authPassword.readOnly = busy;
+    authSubmit.setAttribute("aria-disabled", String(busy));
+    const signup = authMode === "signup";
+    authSubmit.textContent = next === "verifying" ? "Verifying…" : next === "submitting" ? (signup ? "Creating account…" : "Signing in…") : (signup ? "Create account" : "Sign in");
+  }
+
+  function resetAuthWidget() {
+    if (window.turnstile && authWidgetId !== undefined) {
+      try { window.turnstile.reset(authWidgetId); } catch {}
+    }
+  }
+
+  function failAuth(message, field = authPassword) {
+    // Late widget callbacks after cancel or completion must not touch a dialog that moved on.
+    if (authPhase === "idle") return;
+    setAuthPhase("idle");
+    resetAuthWidget();
+    showAuthError(message, field);
+  }
+
+  // Render the auth widget once, on first use. Its callbacks are independent of the summarize widget.
+  function ensureAuthWidget() {
+    authWidgetPromise ??= loadTurnstile().then((sitekey) => {
+      authWidgetId = window.turnstile.render("#auth-turnstile", {
+        sitekey,
+        action: "auth",
+        execution: "execute",
+        appearance: "interaction-only",
+        callback(token) {
+          if (authPhase !== "verifying") return;
+          clearTimeout(authTimer);
+          void submitAuth(token);
+        },
+        "expired-callback": () => { if (authPhase === "verifying") failAuth("Verification expired. Please try again."); },
+        "timeout-callback": () => { if (authPhase === "verifying") failAuth("Verification timed out. Please try again."); },
+        "error-callback": () => { if (authPhase === "verifying") failAuth("Verification could not load. Check your connection, allow challenges.cloudflare.com, and retry."); }
+      });
+      return authWidgetId;
+    });
+    authWidgetPromise.catch(() => { authWidgetPromise = undefined; });
+    return authWidgetPromise;
+  }
+
+  function openAuth({ mode = "signin", opener = document.activeElement, then = null } = {}) {
+    if (authDialog.open) return;
+    authOpener = opener;
+    afterAuth = then;
+    setAuthMode(mode);
+    setAuthPhase("idle");
+    authPassword.value = "";
+    showAuthError("");
+    authDialog.showModal();
+    authEmail.focus();
+    ensureAuthWidget().catch((setupError) => showAuthError(setupError.message, null));
+  }
+
+  authDialog.addEventListener("close", () => {
+    const wasBusy = authPhase !== "idle";
+    setAuthPhase("idle");
+    if (wasBusy) resetAuthWidget();
+    afterAuth = null;
+    authCredentials = null;
+    authPassword.value = "";
+    const opener = authOpener;
+    authOpener = null;
+    // The opener may have disappeared (for example the header button after signing in).
+    const target = opener?.isConnected && opener.getClientRects().length ? opener
+      : isLibraryView && byId("library-title").getClientRects().length ? byId("library-title")
+      : user && accountMenu.getClientRects().length ? accountMenu.querySelector("summary") : null;
+    target?.focus();
+  });
+  authDialog.addEventListener("click", (event) => { if (event.target === authDialog) authDialog.close(); });
+  byId("auth-close").addEventListener("click", () => authDialog.close());
+  byId("auth-switch").addEventListener("click", () => {
+    if (authPhase !== "idle") return;
+    setAuthMode(authMode === "signup" ? "signin" : "signup");
+    showAuthError("");
+    authEmail.focus();
+  });
+  signInButton.addEventListener("click", () => openAuth({ opener: signInButton }));
+  byId("library-sign-in").addEventListener("click", (event) => openAuth({ opener: event.currentTarget }));
+
+  authForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (authPhase !== "idle") return;
+    const email = authEmail.value.trim();
+    const password = authPassword.value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return showAuthError("Enter a valid email address.", authEmail);
+    if (password.length < 8) return showAuthError(authMode === "signup" ? "Use at least 8 characters for your password." : "Enter your password (at least 8 characters).", authPassword);
+    if (password.length > 256) return showAuthError("Use 256 characters or fewer for your password.", authPassword);
+    authCredentials = { email, password };
+    showAuthError("");
+    setAuthPhase("verifying");
+    authTimer = setTimeout(() => failAuth("Verification timed out. Please try again."), 120_000);
+    try {
+      const id = await ensureAuthWidget();
+      if (authPhase !== "verifying") return;
+      window.turnstile.execute(id);
+    } catch (setupError) {
+      failAuth(setupError.message || "Verification could not start. Please reload and try again.");
+    }
+  });
+
+  async function submitAuth(turnstileToken) {
+    setAuthPhase("submitting");
+    const signup = authMode === "signup";
+    try {
+      const response = await apiRequest(signup ? "/api/auth/signup" : "/api/auth/login", {
+        method: "POST",
+        body: { ...authCredentials, turnstileToken }
+      });
+      if (authPhase !== "submitting") return;
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not complete that request. Please try again."));
+      const signedIn = parseUser((await responseData(response)).user);
+      if (!signedIn) throw new Error("The service returned an incomplete response. Please try again.");
+      if (authPhase !== "submitting") return;
+      user = signedIn;
+      const then = afterAuth;
+      afterAuth = null;
+      setAuthPhase("idle");
+      resetAuthWidget();
+      authDialog.close();
+      renderAccount();
+      announceAccount(`Signed in as ${user.email}.`);
+      if (isLibraryView) void routeLibrary(false);
+      else void refreshCounts();
+      then?.();
+    } catch (requestError) {
+      failAuth(requestFailureMessage(requestError, "Could not complete that request. Please try again."), signup ? authEmail : authPassword);
+    }
+  }
+
+  // ---- Save to library ----------------------------------------------------------
+
+  function renderSaveButton() {
+    const brief = currentResult;
+    if (!brief || currentLibraryItem) return;
+    const saved = savedBriefs.has(brief);
+    saveButton.disabled = !brief.share;
+    saveButton.textContent = saved ? "Saved" : "Save";
+    saveButton.classList.toggle("is-saved", saved);
+    saveButton.setAttribute("aria-disabled", String(!brief.share || saved || savingInFlight === brief));
+    byId("save-note").hidden = !saved;
+  }
+
+  async function saveBrief(brief) {
+    if (!brief?.share || savingInFlight === brief || savedBriefs.has(brief)) return;
+    if (!user) {
+      openAuth({ opener: saveButton, then: () => { if (currentResult === brief) void saveBrief(brief); } });
+      return;
+    }
+    savingInFlight = brief;
+    renderSaveButton();
+    actionStatus("save-status", "");
+    try {
+      const response = await apiRequest("/api/library", { method: "POST", body: { shareId: brief.share.url.split("/").pop() } });
+      if (response.status === 401) {
+        endSession();
+        if (currentResult === brief) {
+          actionStatus("save-status", "Your session expired. Sign in to save this brief.", true);
+          openAuth({ opener: saveButton, then: () => { if (currentResult === brief) void saveBrief(brief); } });
+        }
+        return;
+      }
+      if (response.status === 404) {
+        const message = await failureMessage(response, "This brief is no longer available to save. Summarize the video again.");
+        if (currentResult === brief) {
+          actionStatus("save-status", message, true);
+          byId("regenerate-link").hidden = false;
+        }
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not save this brief. Please try again."));
+      const data = await responseData(response);
+      savedBriefs.add(brief);
+      if (currentResult === brief) actionStatus("save-status", data.alreadySaved ? "This brief was already in your library." : "Saved to your library.");
+      void refreshCounts();
+    } catch (requestError) {
+      if (currentResult === brief) actionStatus("save-status", requestFailureMessage(requestError, "Could not save this brief. Please try again."), true);
+    } finally {
+      if (savingInFlight === brief) savingInFlight = null;
+      if (currentResult === brief) renderSaveButton();
+    }
+  }
+
+  saveButton.addEventListener("click", () => {
+    if (saveButton.getAttribute("aria-disabled") === "true") return;
+    void saveBrief(currentResult);
+  });
+
+  // ---- Library ------------------------------------------------------------------
+
+  let libraryFilter = "unread";
+  let libraryRequest = 0;
+  let itemBusy = false;
+  const formatDate = (ms) => new Date(ms).toLocaleDateString(undefined, { dateStyle: "medium" });
+
+  function showLibraryPanel(name) {
+    library.hidden = name === "item" || name === "loading";
+    byId("library-list-view").hidden = name !== "list";
+    byId("library-signed-out").hidden = name !== "signed-out";
+    byId("library-error").hidden = name !== "error";
+    error.hidden = true;
+    if (name !== "item") {
+      result.hidden = true;
+      currentResult = null;
+      currentLibraryItem = null;
+      document.body.classList.remove("has-result");
+    }
+  }
+
+  function showSignedOut(expired) {
+    showLibraryPanel("signed-out");
+    document.title = "Library | YT;DW";
+    byId("library-signed-out-title").textContent = expired ? "Your session has ended" : "Sign in to see your library";
+    byId("library-signed-out-detail").textContent = expired
+      ? "Sign in again to keep reading your saved briefs."
+      : "Saved briefs live in your account, ready to read later.";
+  }
+
+  function showLibraryError(title, message, linkLabel) {
+    showLibraryPanel("error");
+    byId("library-error-title").textContent = title;
+    byId("library-error-message").textContent = message;
+    byId("library-error").querySelector("a").textContent = linkLabel;
+  }
+
+  function navigateLibrary(path) {
+    if (path !== location.pathname + location.search) history.pushState({}, "", path);
+    void routeLibrary(true);
+  }
+
+  function renderLibraryList(items) {
+    const list = byId("library-list");
+    list.replaceChildren(...items.map((item) => {
+      const li = document.createElement("li");
+      const link = document.createElement("a");
+      link.className = "library-item";
+      link.href = `/library?item=${encodeURIComponent(item.id)}`;
+      link.dataset.libraryNav = "";
+      const main = document.createElement("span");
+      main.className = "library-item__main";
+      const title = document.createElement("strong");
+      title.className = "library-item__title";
+      title.textContent = item.title;
+      const meta = document.createElement("span");
+      meta.className = "library-item__meta";
+      meta.textContent = [item.uploader || "YouTube", formatDuration(item.duration), `Saved ${formatDate(item.savedAt)}`].join(" · ");
+      main.append(title, meta);
+      link.append(main);
+      if (item.readAt === null) {
+        const unread = document.createElement("span");
+        unread.className = "library-item__unread";
+        unread.title = "Unread";
+        const label = document.createElement("span");
+        label.className = "sr-only";
+        label.textContent = "Unread";
+        unread.append(label);
+        link.append(unread);
+      }
+      li.append(link);
+      return li;
+    }));
+    const empty = items.length === 0;
+    byId("library-empty").hidden = !empty;
+    if (empty) {
+      const nothingSaved = libraryCounts?.all === 0;
+      byId("library-empty-title").textContent = nothingSaved ? "Nothing saved yet" : "You’re all caught up";
+      byId("library-empty-detail").textContent = nothingSaved
+        ? "Summarize a video, then choose Save to keep its brief here."
+        : "No unread briefs. Switch to All to see everything you’ve saved.";
+    }
+    byId("library-status").textContent = empty
+      ? "No briefs in this list."
+      : `${items.length} ${libraryFilter === "unread" ? "unread " : ""}${items.length === 1 ? "brief" : "briefs"}.`;
+  }
+
+  async function loadLibraryList(request, focus) {
+    showLibraryPanel("list");
+    document.title = "Library | YT;DW";
+    for (const tab of document.querySelectorAll(".library-tab")) tab.setAttribute("aria-pressed", String(tab.dataset.filter === libraryFilter));
+    const list = byId("library-list");
+    list.setAttribute("aria-busy", "true");
+    byId("library-status").textContent = "Loading your library…";
+    if (focus) byId("library-title").focus({ preventScroll: true });
+    try {
+      const response = await apiRequest(`/api/library?filter=${libraryFilter}`);
+      if (request !== libraryRequest) return;
+      if (response.status === 401) {
+        endSession();
+        showSignedOut(true);
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Please reload to try again."));
+      const data = await responseData(response);
+      if (request !== libraryRequest) return;
+      if (!Array.isArray(data.items) || data.items.some((item) => !item || typeof item.id !== "string" || typeof item.title !== "string" ||
+          !Number.isFinite(item.duration) || !Number.isFinite(item.savedAt))) {
+        throw new Error("The service returned an incomplete library. Please try again.");
+      }
+      setCounts(data.counts);
+      renderLibraryList(data.items);
+    } catch (requestError) {
+      if (request !== libraryRequest) return;
+      showLibraryError("Could not load your library", requestFailureMessage(requestError, "Please try again."), "Try again");
+    } finally {
+      if (request === libraryRequest) list.setAttribute("aria-busy", "false");
+    }
+  }
+
+  async function openLibraryItem(id, request) {
+    showLibraryPanel("loading");
+    showStatus("Opening the brief…", "Loading it from your library");
+    try {
+      const response = await apiRequest(`/api/library/${encodeURIComponent(id)}`);
+      if (request !== libraryRequest) return;
+      if (response.status === 401) {
+        endSession();
+        showSignedOut(true);
+        return;
+      }
+      if (response.status === 404) {
+        showLibraryError("Brief unavailable", "This brief is no longer in your library.", "Back to library");
+        document.title = "Library | YT;DW";
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Please reload to try again."));
+      const { item } = await responseData(response);
+      if (request !== libraryRequest) return;
+      if (!item || typeof item.id !== "string") throw new Error("The service returned an incomplete brief. Please try again.");
+      showLibraryPanel("item");
+      showResult({
+        id: item.videoId, title: item.title, uploader: item.uploader, duration: item.duration,
+        summary: item.summary, transcriptTruncated: Boolean(item.transcriptTruncated), share: null
+      }, { libraryItem: item });
+    } catch (requestError) {
+      if (request !== libraryRequest) return;
+      showLibraryError("Could not open this brief", requestFailureMessage(requestError, "Please try again."), "Back to library");
+    } finally {
+      if (request === libraryRequest) {
+        status.hidden = true;
+        byId("process-announcement").textContent = "";
+      }
+    }
+  }
+
+  async function routeLibrary(focus) {
+    const request = ++libraryRequest;
+    if (!user) {
+      showSignedOut(false);
+      return;
+    }
+    const id = new URLSearchParams(location.search).get("item");
+    if (id) await openLibraryItem(id, request);
+    else await loadLibraryList(request, focus);
+  }
+
+  function renderLibraryItemState() {
+    const item = currentLibraryItem;
+    if (!item) return;
+    const isRead = item.readAt !== null;
+    readButton.textContent = isRead ? "Mark as unread" : "Mark as read";
+    byId("library-meta").textContent = `Saved ${formatDate(item.savedAt)} · ${isRead ? "Read" : "Unread"}`;
+  }
+
+  for (const tab of document.querySelectorAll(".library-tab")) {
+    tab.addEventListener("click", () => {
+      if (tab.dataset.filter === libraryFilter || !user) return;
+      libraryFilter = tab.dataset.filter;
+      void loadLibraryList(++libraryRequest, false);
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest?.("a[data-library-nav]");
+    if (!link || !isLibraryView || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigateLibrary(link.getAttribute("href"));
+  });
+  window.addEventListener("popstate", () => { if (isLibraryView) void routeLibrary(true); });
+
+  readButton.addEventListener("click", async () => {
+    const item = currentLibraryItem;
+    if (!item || itemBusy) return;
+    const makeRead = item.readAt === null;
+    itemBusy = true;
+    readButton.setAttribute("aria-disabled", "true");
+    actionStatus("item-status", "");
+    try {
+      const response = await apiRequest(`/api/library/${encodeURIComponent(item.id)}`, { method: "PATCH", body: { read: makeRead } });
+      if (response.status === 401) {
+        endSession();
+        if (currentLibraryItem === item) showSignedOut(true);
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not update this brief. Please try again."));
+      const data = await responseData(response);
+      if (!data.item || (data.item.readAt !== null && !Number.isFinite(data.item.readAt))) throw new Error("The service returned an incomplete response. Please try again.");
+      item.readAt = data.item.readAt;
+      if (currentLibraryItem !== item) return;
+      renderLibraryItemState();
+      actionStatus("item-status", makeRead ? "Marked as read." : "Marked as unread.");
+      void refreshCounts();
+    } catch (requestError) {
+      if (currentLibraryItem === item) actionStatus("item-status", requestFailureMessage(requestError, "Could not update this brief. Please try again."), true);
+    } finally {
+      itemBusy = false;
+      readButton.setAttribute("aria-disabled", "false");
+    }
+  });
+
+  const confirmDialog = byId("confirm-dialog");
+  deleteButton.addEventListener("click", () => {
+    if (!currentLibraryItem || itemBusy) return;
+    byId("confirm-detail").textContent = `“${currentLibraryItem.title}” will be removed from your library. This can’t be undone.`;
+    confirmDialog.showModal();
+    byId("confirm-cancel").focus();
+  });
+  byId("confirm-cancel").addEventListener("click", () => {
+    confirmDialog.close();
+    deleteButton.focus();
+  });
+  confirmDialog.addEventListener("click", (event) => { if (event.target === confirmDialog) confirmDialog.close(); });
+  byId("confirm-delete").addEventListener("click", async () => {
+    const item = currentLibraryItem;
+    if (!item || itemBusy) return;
+    itemBusy = true;
+    confirmDialog.close();
+    deleteButton.setAttribute("aria-disabled", "true");
+    actionStatus("item-status", "");
+    try {
+      const response = await apiRequest(`/api/library/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      if (response.status === 401) {
+        endSession();
+        if (currentLibraryItem === item) showSignedOut(true);
+        return;
+      }
+      // 404 means it is already gone, which is the outcome the user wanted.
+      if (!response.ok && response.status !== 404) throw new Error(await failureMessage(response, "Could not delete this brief. Please try again."));
+      if (currentLibraryItem !== item) return;
+      // Replace the item entry so Back doesn't reopen a deleted brief.
+      history.replaceState({}, "", "/library");
+      void routeLibrary(true);
+      announceAccount("Brief deleted.");
+    } catch (requestError) {
+      if (currentLibraryItem === item) {
+        actionStatus("item-status", requestFailureMessage(requestError, "Could not delete this brief. Please try again."), true);
+        deleteButton.focus();
+      }
+    } finally {
+      itemBusy = false;
+      deleteButton.setAttribute("aria-disabled", "false");
+    }
+  });
+
+  if (isLibraryView) {
+    libraryLink.dataset.libraryNav = "";
+    void loadAccount().then(() => routeLibrary(false));
+  } else {
+    void loadAccount();
+    if (isSharedView) void loadSharedBrief();
+    else {
+      input.value = new URLSearchParams(location.search).get("url") || "";
+      setSubmitState();
+      void setupVerification();
+    }
   }
 })();

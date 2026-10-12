@@ -1,5 +1,27 @@
 # YT;DW Test Results
 
+## Accounts and library, Phase 1 — October 12, 2026
+
+Validated on branch `feat/accounts-library` (uncommitted) before any deployment.
+
+- `npm run typecheck`: passed.
+- `npm test`: 25 of 25 passed (13 existing backend tests plus 12 for auth, library,
+  isolation, limits, and the `/library` shell, against local D1).
+- `npm run test:ui`: 128 passed, 4 skipped (the skipped tests are the screenshot
+  capture runs).
+- `npm run test:integration`: 4 of 4 passed (flow A5 at desktop 1440x900 and mobile
+  390x844) against the real Worker, SQLite DOs, local D1 with the real migration,
+  and real cookies. The same 4 passed with `INTEGRATION_HOST=127.0.0.1`.
+- `git diff --check`: passed.
+- Chromium accepted the Secure `__Host-ytdw_session` cookie over `http://localhost`
+  and `http://127.0.0.1`; the cookie was HttpOnly, Secure, SameSite=Lax, path `/`,
+  and invisible to `document.cookie`. The Origin check, response shapes, and
+  `/library` shell served by the Worker matched the frontend; no integration
+  mismatches were found and no source changes were needed.
+- Not verified: real Turnstile widgets for the `auth` action, HTTPS in production,
+  a remote D1 database and migration, and Safari/Firefox cookie handling. The
+  browser Turnstile script is mocked and Siteverify is simulated in the harness.
+
 ## Legacy account cleanup — September 18, 2026
 
 - Owner authorized retirement of YT;DW in `ssteiner`, account

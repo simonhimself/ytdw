@@ -109,6 +109,31 @@ outcomes across desktop/mobile widths and light/dark themes.
 Npm audit covers the JavaScript dependency tree, not the existing container image.
 Native iOS behavior and real screen-reader speech remain manual follow-up checks.
 
+## Accounts and library (Phase 1)
+
+Spec: `docs/ACCOUNTS.md`. Three layers, none needing Docker or live services.
+`npm test` covers the API against the real Worker, SQLite DOs, and a local D1
+database with the real migrations. `npm run test:ui` covers the client against a
+stateful fake account API at desktop/mobile widths in both themes.
+`npm run test:integration` runs the real frontend against the real Worker and D1
+in Chromium (desktop 1440x900 and mobile 390x844) with real cookies. It mocks only
+the Turnstile browser script (and Siteverify inside the harness); no `/api` route
+is mocked. It is the only layer that proves the two sides agree.
+
+| ID | Check | Pass condition |
+| --- | --- | --- |
+| A1 | Credentials and sessions | Signup/login set an `HttpOnly; Secure; SameSite=Lax` `__Host-ytdw_session` cookie; the database holds only hashed sessions and PBKDF2 password hashes. Duplicate signup returns 409; every login failure shares one generic message; logout deletes the session. |
+| A2 | Request guards | Auth requires a Turnstile token with action `auth`; the auth rate limit runs before the body is read or Siteverify is called. Mutations need a JSON content type and a matching `Origin`. |
+| A3 | Library API | Save copies the server share snapshot; repeats are idempotent; expired shares return 404. List filters unread/all with counts, newest first; PATCH toggles read; DELETE removes. Users cannot see or modify each other's items; the cap is 1,000 briefs; `/library` serves the app shell with security headers. |
+| A4 | Account UI | Auth dialog focus handling, validation, inline errors, Save (signed out/in, already saved, expired share, expired session), library tabs/counts/empty states, item view, mark read/unread, confirmed delete, sign out, and deep links. |
+| A5 | Integration flow | Summarize, Save while signed out, create account in the dialog, auto-save, header Library badge 1, Unread tab, open item, Mark as read, All tab, reload and `/library?item=` deep link with the persisted session, Delete, empty state, Sign out, signed-out `/library`, wrong password (generic error), sign in again. Also opening `/s/<id>`, Save, idempotent re-save, and duplicate-signup 409. Each step asserts no page errors and no unexpected same-origin 4xx/5xx. |
+| A6 | Cookie on loopback | Chromium accepts the Secure `__Host-` cookie over `http://localhost` and `http://127.0.0.1` (`INTEGRATION_HOST=127.0.0.1 npm run test:integration`) without weakening production cookie attributes. |
+
+After an approved deployment: create the D1 database, replace the placeholder
+`database_id` in `wrangler.jsonc`, run `wrangler d1 migrations apply ytdw --remote`,
+then repeat A5 by hand on `https://ytdw.fyi/`. Local tests cannot validate real
+Turnstile widgets for the `auth` action or the production cookie over HTTPS.
+
 ## Account migration
 
 | ID | Check | Pass condition |
