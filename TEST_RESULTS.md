@@ -1,8 +1,25 @@
 # YT;DW Test Results
 
+## Accounts and library production release — October 12, 2026
+
+- Created production D1 `ytdw` (`e0f2c9bf-c8d5-4405-8cbc-f1aa5c1256c6`) and applied
+  `0001_accounts.sql` and `0002_email_recovery.sql` remotely before deploying.
+- `wrangler deploy --dry-run` bundled cleanly with every binding; deployed with
+  `--containers-rollout=none` (image unchanged) as version
+  `f007099b-daa0-49f2-a426-24aec4cdb141`. A first attempt failed on a Cloudflare API
+  504 before upload and changed nothing.
+- Smoke checks on `https://ytdw.fyi/`: `/`, `/library`, `/account`, `/verify` 200;
+  `/api/auth/me` `{"user":null}`; `/api/library` 401 JSON; `/verify` sends
+  `referrer-policy: no-referrer`; `www.ytdw.fyi` and `ytdw.simons.workers.dev` 301 to
+  `https://ytdw.fyi` with path and query preserved.
+- Owner confirmed sign-up works on production with real Turnstile, real email, and
+  the production database. The Preview at
+  `https://feat-accounts-library.previews.ytdw.fyi/` was click-tested by the owner
+  before release.
+
 ## Share from the library — October 12, 2026
 
-Validated on branch `feat/accounts-library` (uncommitted); check A12 in `TEST_PLAN.md`.
+Validated on branch `feat/accounts-library`; check A12 in `TEST_PLAN.md`.
 Nothing was committed, pushed, or deployed (`wrangler deploy` not run).
 
 - `npm run typecheck`: passed.
