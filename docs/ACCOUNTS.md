@@ -380,8 +380,13 @@ it is used, and the library stays a place for finished briefs only.
   when the request ends, including when the user leaves the page.
 - **Several links in the single bar:** Summarize stays disabled and "That's
   several links. **Queue them instead**" replaces the "Queue several videos" link;
-  it moves the links into the queue box. Signed out, it reads "Sign in to queue
-  them" and opens the sign-in dialog.
+  it moves the links into the queue box. Signed out, it reads "Sign up to queue
+  them" and opens the dialog in Create account mode.
+- **Signed-out visitors** also see "Got several? **Queue several videos**". It opens
+  the dialog in Create account mode ("Create an account to queue several videos.
+  Their briefs land in your library.") and continues into the queue box after
+  sign-up (disabled until the email is verified). Under a finished brief, "**Sign
+  in** to save this brief and read it later." does what Save does: sign in, then save.
 - **Finishing:** while anything is queued or processing, the client re-checks
   `GET /api/queue` every 10 seconds when the tab is visible (and immediately when
   it becomes visible). When items finish it announces "N briefs are ready in your

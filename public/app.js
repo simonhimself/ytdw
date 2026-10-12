@@ -634,6 +634,7 @@
   // Pages that depend on the signed-in user re-render whenever it changes.
   function afterSessionChange() {
     syncQueue();
+    renderSaveButton();
     if (isAccountView) renderAccountPage();
     if (isVerifyView) renderVerifyPage();
   }
@@ -953,11 +954,12 @@
     const show = several && isHomeView && phase === "idle";
     severalHint.hidden = !show;
     // One hint at a time: the several-links offer replaces the general queue link.
-    byId("queue-toggle").hidden = !user || !isHomeView || !queueBox.hidden || show;
-    if (show) byId("several-links-action").textContent = user ? "Queue them instead" : "Sign in to queue them";
+    // Signed-out visitors see the link too; it invites them to create an account.
+    byId("queue-toggle").hidden = !accountKnown || !isHomeView || !queueBox.hidden || show;
+    if (show) byId("several-links-action").textContent = user ? "Queue them instead" : "Sign up to queue them";
   }
   byId("several-links-action").addEventListener("click", () => {
-    if (!user) return openAuth({ opener: byId("several-links-action") });
+    if (!user) return openAuth({ mode: "signup", opener: byId("several-links-action"), lede: queueSignupLede });
     const links = linksIn(input.value);
     const existing = queueLines();
     queueUrls.value = [...existing, ...links].join("\n");
@@ -966,7 +968,11 @@
     openQueueBox();
   });
 
-  queueOpen.addEventListener("click", openQueueBox);
+  const queueSignupLede = "Create an account to queue several videos. Their briefs land in your library.";
+  queueOpen.addEventListener("click", () => {
+    if (user) return openQueueBox();
+    openAuth({ mode: "signup", opener: queueOpen, lede: queueSignupLede, then: openQueueBox });
+  });
   byId("queue-cancel").addEventListener("click", closeQueueBox);
   queueUrls.addEventListener("input", () => {
     showQueueError("");
@@ -1145,12 +1151,13 @@
     return authWidgetPromise;
   }
 
-  function openAuth({ mode = "signin", opener = document.activeElement, then = null } = {}) {
+  function openAuth({ mode = "signin", opener = document.activeElement, then = null, lede = null } = {}) {
     if (authDialog.open) return;
     authOpener = opener;
     afterAuth = then;
     // setAuthMode also clears any confirmation panel left from a previous forgot request.
     setAuthMode(mode);
+    if (lede) byId("auth-lede").textContent = lede;
     setAuthPhase("idle");
     authPassword.value = "";
     showAuthError("");
@@ -1284,6 +1291,8 @@
 
   function renderSaveButton() {
     const brief = currentResult;
+    // Signed out, a visible invitation explains how to keep the brief.
+    byId("save-hint").hidden = !brief || Boolean(currentLibraryItem) || !accountKnown || Boolean(user) || !brief.share;
     if (!brief || currentLibraryItem) return;
     const saved = savedBriefs.has(brief);
     saveButton.disabled = !brief.share;
@@ -1333,6 +1342,7 @@
     }
   }
 
+  byId("save-hint-action").addEventListener("click", () => void saveBrief(currentResult));
   saveButton.addEventListener("click", () => {
     if (saveButton.getAttribute("aria-disabled") === "true") return;
     void saveBrief(currentResult);

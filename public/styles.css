@@ -611,6 +611,7 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 .copy-button.is-saved[aria-disabled="true"] { color: var(--kumo-text-default); opacity: 1; cursor: default; }
 .copy-button.is-saved:hover { background: transparent; border-color: var(--kumo-hairline); }
 .share-note a { color: var(--kumo-text-default); text-underline-offset: 3px; }
+.share-note .link-button { padding: 0; font-size: inherit; }
 
 [data-view="library"] .composer, [data-view="library"] .intro, [data-view="library"] .shared-home { display: none; }
 [data-view="library"] .workspace { margin-top: 0; padding-top: 40px; }
