@@ -27,6 +27,7 @@
   let currentResult = null;
   // The single-bar video being summarized on this page; the header queue menu shows it too.
   let liveSummary = null;
+  const LIVE_MENU_DELAY_MS = 1000;
   let currentLibraryItem = null;
   let phase = "idle";
   let submittedUrl = "";
@@ -352,8 +353,11 @@
 
   async function runSummary(url, turnstileToken) {
     setPhase("processing");
-    liveSummary = { videoId: videoIdOf(url) };
-    renderQueueMenu();
+    // Cached briefs return at once: show the run in the header menu only if it takes a while.
+    const liveTimer = setTimeout(() => {
+      liveSummary = { videoId: videoIdOf(url) };
+      renderQueueMenu();
+    }, LIVE_MENU_DELAY_MS);
     try {
       const response = await fetch("/api/summarize", {
         method: "POST",
@@ -374,6 +378,7 @@
       // Never discard a successful brief just because its replacement failed.
       if (currentResult) result.hidden = false;
     } finally {
+      clearTimeout(liveTimer);
       liveSummary = null;
       renderQueueMenu();
       setPhase("idle");
@@ -724,6 +729,7 @@
     duplicate: "Listed twice",
     alreadyQueued: "Already queued",
     alreadySaved: "Already in library",
+    libraryFull: "Library is full",
     invalid: "Not a YouTube link",
     overQuota: "Over today’s limit",
   };
@@ -924,6 +930,10 @@
       clearTimeout(queuePollTimer);
       queueItems = [];
       queueQuota = null;
+      // The next person on this browser must not see what was pasted.
+      queueUrls.value = "";
+      byId("queue-results").hidden = true;
+      showQueueError("");
       renderQueueMenu();
       renderQueueBox();
     }
@@ -967,7 +977,7 @@
     const problems = results.filter((entry) => entry.status !== "queued");
     list.replaceChildren(...problems.map((entry) => {
       const li = document.createElement("li");
-      if (entry.status === "invalid" || entry.status === "overQuota") li.className = "is-problem";
+      if (["invalid", "overQuota", "libraryFull"].includes(entry.status)) li.className = "is-problem";
       const label = document.createElement("strong");
       label.textContent = queueResultLabels[entry.status] ?? entry.status;
       const url = document.createElement("span");
@@ -986,10 +996,16 @@
     // One hint at a time: the several-links offer replaces the general queue link.
     // Signed-out visitors see the link too; it invites them to create an account.
     byId("queue-toggle").hidden = !accountKnown || !isHomeView || !queueBox.hidden || show;
-    if (show) byId("several-links-action").textContent = user ? "Queue them instead" : "Sign up to queue them";
+    if (show) byId("several-links-action").textContent = !user ? "Sign up to queue them" : user.emailVerified ? "Queue them instead" : "Verify your email to queue them";
   }
   byId("several-links-action").addEventListener("click", () => {
     if (!user) return openAuth({ mode: "signup", opener: byId("several-links-action"), lede: queueSignupLede });
+    // Unverified accounts cannot queue: leave the links in place and point at the banner.
+    if (!user.emailVerified) {
+      const resend = byId("verify-banner-resend");
+      resend.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      return resend.focus({ preventScroll: true });
+    }
     const links = linksIn(input.value);
     const existing = queueLines();
     queueUrls.value = [...existing, ...links].join("\n");
@@ -1053,6 +1069,10 @@
       }
     } catch (requestError) {
       showQueueError(requestFailureMessage(requestError, "Could not add these videos. Please try again."));
+      // The disabled textarea lost focus while adding; give it back with the error.
+      queueBusy = false;
+      renderQueueBox();
+      queueUrls.focus();
     } finally {
       if (queueBusy) {
         queueBusy = false;
