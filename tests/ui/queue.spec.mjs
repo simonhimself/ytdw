@@ -296,9 +296,35 @@ test('a single-bar summary shows in the header menu while it runs', async ({ pag
   await expect(first).toContainText(`youtu.be/${ids[0]}`);
   await expect(first).toContainText('Summarizing on this page…');
   await expect(first.getByRole('button')).toHaveCount(0);
+  await expect(page.locator('#queue-head')).toHaveText('In progress · queued briefs go to your library');
   release();
   await expect(page.locator('#result-title')).toHaveText('First video brief');
   await expect(page.locator('#queue-count')).toHaveText('1');
+});
+
+test('with nothing queued, a single-bar summary is not promised to the library or counted', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account, { used: 2 });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/summarize', async route => {
+    await held;
+    await route.fulfill({ json: { id: ids[0], title: 'First video brief', uploader: 'Example channel', duration: 480, summary: '## Summary: X\n\nY', transcriptTruncated: false, share: null } });
+  });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean(window.__verification))).toBe(true);
+  // Opening the queue box loads the quota, so the menu has one it could show.
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  await expect(page.locator('#queue-left')).toHaveText('48 of 50 left today');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByLabel('YouTube URL', { exact: true }).fill(link(ids[0]));
+  await page.getByRole('button', { name: 'Summarize', exact: true }).click();
+  await page.locator('#queue-summary').click();
+  await expect(page.locator('#queue-list li')).toContainText('Summarizing on this page…');
+  await expect(page.locator('#queue-head')).toHaveText('In progress');
+  await expect(page.locator('#queue-quota')).toBeHidden();
+  release();
+  await expect(page.locator('#queue-menu')).toBeHidden();
 });
 
 test('signed-out visitors never see the menu for a single-bar summary', async ({ page }) => {
