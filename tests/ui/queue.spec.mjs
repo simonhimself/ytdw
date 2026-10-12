@@ -205,12 +205,15 @@ test('the header menu lists progress, retries and removes items, and announces f
 
   await rows.nth(2).getByRole('button', { name: `Retry youtu.be/${ids[2]}` }).click();
   await expect(rows.nth(2)).toContainText('Queued');
+  // Retry is gone from the row; focus stays on that row's video.
+  await expect(rows.nth(2).getByRole('link', { name: `youtu.be/${ids[2]}` })).toBeFocused();
   expect(queue.requests.find(r => r.path.endsWith('/retry'))).toMatchObject({ method: 'POST', path: `/api/queue/${itemId(3)}/retry`, contentType: 'application/json' });
   await rows.nth(3).getByRole('button', { name: `Remove youtu.be/${ids[3]}` }).click();
   await expect(rows).toHaveCount(3);
   await expect(page.locator('#account-status')).toHaveText(`Removed youtu.be/${ids[3]}.`);
   expect(queue.requests.find(r => r.method === 'DELETE')).toMatchObject({ path: `/api/queue/${itemId(4)}`, contentType: 'application/json' });
-  await expect(page.locator(':focus')).toHaveText('Remove');
+  // Focus moves to the neighboring row's video, never to another Remove.
+  await expect(rows.nth(2).getByRole('link', { name: `youtu.be/${ids[2]}` })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.locator('#queue-menu')).not.toHaveAttribute('open', '');
   await expect(summary).toBeFocused();
@@ -226,6 +229,35 @@ test('the header menu lists progress, retries and removes items, and announces f
   queue.items = [];
   await recheck(page);
   await expect(page.locator('#queue-menu')).toBeHidden();
+});
+
+test('polling the header menu keeps keyboard focus where it was', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  const queue = await mockQueue(page, account, { items: [
+    queueItem(itemId(1), ids[0], { status: 'processing' }),
+    queueItem(itemId(2), ids[1]),
+    queueItem(itemId(3), ids[2]),
+  ] });
+  await page.goto('/');
+  await page.locator('#queue-summary').click();
+  const rows = page.locator('#queue-list li');
+  const remove = rows.nth(1).getByRole('button', { name: `Remove youtu.be/${ids[1]}` });
+  await remove.focus();
+  const before = await remove.elementHandle();
+  // Nothing changed: the rows are left as they are.
+  await recheck(page);
+  await expect.poll(() => queue.requests.filter(r => r.method === 'GET').length).toBeGreaterThan(1);
+  expect(await before.evaluate(el => el.isConnected && el === document.activeElement)).toBe(true);
+  // Something changed: the same control on the same item gets focus back.
+  queue.items[0].status = 'queued';
+  await recheck(page);
+  await expect(rows.nth(0)).toContainText('Queued');
+  await expect(remove).toBeFocused();
+  // The focused item finished elsewhere: focus moves to the row now in its place.
+  queue.items = queue.items.filter(item => item.id !== itemId(2));
+  await recheck(page);
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1).getByRole('link', { name: `youtu.be/${ids[2]}` })).toBeFocused();
 });
 
 test('the header menu closes on outside clicks and is gone after sign-out', async ({ page }) => {
