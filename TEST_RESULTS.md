@@ -1,5 +1,20 @@
 # YT;DW Test Results
 
+## Background summary queue production release — October 12, 2026
+
+- Owner click-tested sign-in, verification, and queueing on Preview
+  `feat-summary-queue` with real Turnstile, YouTube, and Workers AI, then approved
+  release. Merged as simonhimself/ytdw#5.
+- Applied `0003_summary_queue.sql` to production D1 `ytdw` remotely, then deployed with
+  `--containers-rollout=none` (image unchanged) as version
+  `79693c4f-709c-47d6-9599-3c88dc8691f2`, adding `QueueRunner` under migration `v4`.
+- Smoke checks on `https://ytdw.fyi/`: `/`, `/library`, `/account` 200; `GET` and
+  `POST /api/queue` without a session 401 JSON with `no-store`; served `app.js` contains
+  the queue code; `/api/auth/me` `{"user":null}`; `www.ytdw.fyi` 301 to `https://ytdw.fyi`.
+- Cleanup: deleted Preview `feat-summary-queue` and its container app
+  `ytdw_feat-summary-queue_Sandbox` (`a03e5617-…`); only `ytdw-sandbox` remains. Deleted
+  the merged `feat/summary-queue` branch locally and on GitHub.
+
 ## Background summary queue, Phase 2 — October 12, 2026
 
 Local validation on branch `feat/summary-queue`; checks Q1–Q10 in `TEST_PLAN.md`.
