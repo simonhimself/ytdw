@@ -61,23 +61,34 @@ touching production. Wrangler 4.149 or newer is required. The `previews` block i
 `wrangler.jsonc` mirrors every binding the code reads from `env`, pointed at
 preview-safe resources (Previews inherit nothing from the top level).
 
-Deploy or update a Preview from the branch checkout (the name defaults to the git
-branch, but a branch with a slash needs an explicit name):
+Deploy or update a Preview from any branch checkout, with no per-branch config. The
+name defaults to the git branch with `/` turned into `-` (`feat/x` becomes `feat-x`):
 
 ```bash
-npx wrangler preview --name feat-accounts-library
+npx wrangler preview
 ```
 
-- **Hostnames.** `https://<name>.previews.ytdw.fyi` (custom domain; `previews.ytdw.fyi`
-  is a Preview-only domain with `enabled: false`, so it never serves production) and
-  `https://<name>-ytdw.simons.workers.dev`. Each deployment also gets a unique URL
-  (`<id>.previews.ytdw.fyi`), which is not in the Turnstile allowlist, so use the
-  Preview URL for click-testing. The Preview URL is public. The session cookie is
-  host-only, so test on the host named in `APP_ORIGIN`, which is also the host
-  that email links point to.
+- **Hostname.** `https://<name>.previews.ytdw.fyi` is the only supported Preview host
+  (custom domain; `previews.ytdw.fyi` is a Preview-only domain with `enabled: false`,
+  so it never serves production). Do not use `workers.dev` Preview URLs: they are not
+  accepted by the Turnstile check and email links will not point at them. Each
+  deployment also gets a unique `<id>.previews.ytdw.fyi` URL; it works too, but the
+  session cookie is host-only, so stay on one host while testing. The Preview URL is
+  public.
+- **Why any name works.** `previews.vars.TURNSTILE_HOSTNAMES` is `*.previews.ytdw.fyi`,
+  which the Worker matches as exactly one `[a-z0-9-]` label before the suffix (not
+  `previews.ytdw.fyi` itself, not `a.b.previews.ytdw.fyi`, not lookalikes). The Turnstile
+  widget lists `ytdw.fyi`, and Cloudflare authorizes a listed hostname's subdomains
+  (<https://developers.cloudflare.com/turnstile/additional-configuration/hostname-management/>),
+  so the widget needs no change per Preview. `previews.vars.PREVIEW_HOST_SUFFIX`
+  (`previews.ytdw.fyi`) makes account emails link to the request host when it matches
+  that rule. `APP_ORIGIN` is deliberately unset in Previews: a request whose host does
+  not match sends no email instead of linking somewhere else. Production leaves
+  `PREVIEW_HOST_SUFFIX` unset, so it ignores the Host header and always uses
+  `APP_ORIGIN`.
 - **Database.** D1 `ytdw-preview` (id in `previews.d1_databases` and
-  `wrangler.preview-migrations.jsonc`), separate from production. Apply new
-  migrations before previewing code that needs them:
+  `wrangler.preview-migrations.jsonc`), separate from production but shared by every
+  Preview. Apply new migrations before previewing code that needs them:
 
   ```bash
   npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc
@@ -92,18 +103,22 @@ npx wrangler preview --name feat-accounts-library
   npx wrangler preview base-config secret put TURNSTILE_SECRET
   ```
 
-- **Branch-specific vars.** `previews.vars.APP_ORIGIN` and `TURNSTILE_HOSTNAMES`
-  contain the Preview name. A Preview with a different name must change them, and
-  its two hostnames must also be added to the Turnstile widget's domains, otherwise
-  the Turnstile check fails.
 - **Other resources.** Rate-limit namespaces use ids `71001`–`71007` (production:
   `1001`, `1002`, `61003`–`61007`). Email is sent from `noreply@ytdw.fyi` for real, so
   only use addresses you control. Each Preview gets its own Durable Object
   namespaces and Sandbox container app (`ytdw_<name>_Sandbox`); container support
   in Previews is partial, and Browser Rendering is the primary transcript path.
-- **Cleanup.** `npx wrangler preview delete --name <name>` removes the Preview, but
-  its container app can remain: check `npx wrangler containers list` and delete only
-  the one named `ytdw_<name>_Sandbox`.
+- **Cleanup.** After the branch is merged, remove its Preview and the container app
+  it can leave behind:
+
+  ```bash
+  npx wrangler preview delete --name <name> --skip-confirmation
+  npx wrangler containers list
+  ```
+
+  Find the app named exactly `ytdw_<name>_Sandbox` in the list and delete it by its
+  id (`npx wrangler containers delete <id>`). Never delete a container app whose name
+  differs, since the production Sandbox and other Previews have their own.
 
 ## Sharing and retention
 

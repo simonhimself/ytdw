@@ -141,12 +141,12 @@ async function handleCredentials(request: Request, env: Env, ctx: ExecutionConte
       // The UNIQUE(email) constraint is the authority; a pre-check would race.
       if (error instanceof Error && /UNIQUE/i.test(error.message)) {
         // Tell the owner someone tried to register their address.
-        inBackground(ctx, sendDuplicateNotice(env, email));
+        inBackground(ctx, sendDuplicateNotice(env, email, new URL(request.url).hostname));
         return apiError(409, DUPLICATE_ACCOUNT);
       }
       throw error;
     }
-    inBackground(ctx, sendVerification(env, { id, email }));
+    inBackground(ctx, sendVerification(env, { id, email }, new URL(request.url).hostname));
     return signedIn({ email, emailVerified: false }, await startSession(env, id, previous), 201);
   }
 

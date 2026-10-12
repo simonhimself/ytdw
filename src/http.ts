@@ -1,4 +1,6 @@
 // Request helpers shared by the summarize, auth, and library routes.
+import { isPreviewHost } from "./hosts";
+
 export const MAX_REQUEST_BYTES = 8_192;
 export const NO_STORE = { "cache-control": "no-store" };
 export const SHARE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -96,15 +98,16 @@ export async function verifyTurnstile(
   token: unknown,
   expectedAction: string,
 ): Promise<boolean> {
-  const expectedHostnames = new Set(
-    env.TURNSTILE_HOSTNAMES.split(",").map((hostname) => hostname.trim()).filter(Boolean),
-  );
+  const entries = env.TURNSTILE_HOSTNAMES.split(",").map((hostname) => hostname.trim()).filter(Boolean);
+  // "*.suffix" entries (Workers Previews) match exactly one label before the suffix.
+  const expectedHostnames = new Set(entries.filter((entry) => !entry.startsWith("*.")));
+  const previewSuffixes = entries.filter((entry) => entry.startsWith("*.")).map((entry) => entry.slice(2));
   if (
     !env.TURNSTILE_SECRET ||
     typeof token !== "string" ||
     token.length === 0 ||
     token.length > 2048 ||
-    expectedHostnames.size === 0
+    entries.length === 0
   ) {
     return false;
   }
@@ -129,7 +132,7 @@ export async function verifyTurnstile(
       result.success === true &&
       result.action === expectedAction &&
       typeof result.hostname === "string" &&
-      expectedHostnames.has(result.hostname)
+      (expectedHostnames.has(result.hostname) || previewSuffixes.some((suffix) => isPreviewHost(result.hostname, suffix)))
     );
   } catch {
     return false;

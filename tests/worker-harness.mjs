@@ -123,7 +123,11 @@ export default { async fetch(request, env, ctx) {
   const namespace = env.COORDINATOR;
   return worker.fetch(request, {...env,
     MIGRATION_TARGET: legacy ? 'https://ytdw.fyi' : undefined,
-    APP_ORIGIN: request.headers.get('x-test-app-origin') ?? 'https://ytdw.fyi',
+    // The header value "unset" leaves APP_ORIGIN undefined, as in Previews.
+    APP_ORIGIN: request.headers.get('x-test-app-origin') === 'unset' ? undefined : request.headers.get('x-test-app-origin') ?? 'https://ytdw.fyi',
+    // Previews-only vars; unset (like production) unless a test sends the header.
+    PREVIEW_HOST_SUFFIX: request.headers.get('x-test-preview-suffix') ?? undefined,
+    TURNSTILE_HOSTNAMES: request.headers.get('x-test-turnstile-hostnames') ?? env.TURNSTILE_HOSTNAMES,
     REQUEST_RATE_LIMIT:limit('request'),CLIENT_RATE_LIMIT:limit('client'),GLOBAL_RATE_LIMIT:limit('global'),
     SHARE_READ_RATE_LIMIT:limit('share-client'),SHARE_GLOBAL_RATE_LIMIT:limit('share-global'),
     AUTH_RATE_LIMIT:limit('auth'),LIBRARY_RATE_LIMIT:limit('library'),
@@ -169,8 +173,9 @@ export default { async fetch(request, env, ctx) {
     if (!request.url.includes('/turnstile/v0/siteverify')) throw new Error('Unexpected outbound request');
     verifications++;
     // Tokens named for auth return the auth action; every other token is a summarize token.
+    // A token of the form "<token>@<hostname>" makes Siteverify report that hostname.
     const token = new URLSearchParams(await request.text()).get('response') ?? '';
-    return Response.json({ success: true, action: token.startsWith('fixture-auth') ? 'auth' : 'summarize', hostname: 'localhost' });
+    return Response.json({ success: true, action: token.startsWith('fixture-auth') ? 'auth' : 'summarize', hostname: token.includes('@') ? token.slice(token.indexOf('@') + 1) : 'localhost' });
   } } } }] };
   const mf = new Miniflare(options);
   await mf.ready;
@@ -182,9 +187,11 @@ export default { async fetch(request, env, ctx) {
     await db.batch(statements.map(sql => db.prepare(sql)));
   }
   const request = (path, init = {}) => mf.dispatchFetch(`http://localhost${path}`, init);
+  // Same as request, but addressed to another Host (Previews hostname tests).
+  const requestAt = (host, path, init = {}) => mf.dispatchFetch(`http://${host}${path}`, init);
   const control = async (action, id, scope = 'global') => (await request('/__control', { method: 'POST', headers: { 'x-test-scope': scope }, body: JSON.stringify({ action, id }) })).json();
   const post = (id, scope = 'global', headers = {}) => request('/api/summarize', { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-scope': scope, ...headers }, body: JSON.stringify({ url: `https://youtu.be/${id}`, turnstileToken: 'fixture-token' }) });
-  return { mf, request, control, post, verifications: () => verifications,
+  return { mf, request, requestAt, control, post, verifications: () => verifications,
     emails: () => control('email:list'), clearEmails: () => control('email:clear'), failEmails: failing => control(failing ? 'email:fail' : 'email:ok'),
     captionRequests: () => [...captionRequests], failCaptions: (id, status) => captionStatuses.set(id, status),
     failBrowserCaptions: (id, status) => captionStatuses.set(`browser:${id}`, status), async reload() {

@@ -46,7 +46,7 @@ async function resendVerification(request: Request, env: Env, ctx: ExecutionCont
   if (!user) return unauthorized();
   if (user.emailVerified) return apiJson({ user: publicUser(user) });
   // Throttling happens silently inside, so the response never depends on it.
-  inBackground(ctx, sendVerification(env, user));
+  inBackground(ctx, sendVerification(env, user, new URL(request.url).hostname));
   return apiJson({}, { status: 202 });
 }
 
@@ -59,7 +59,7 @@ async function forgotPassword(request: Request, env: Env, ctx: ExecutionContext)
   }
   // Lookup and send happen after the response, so the reply and its timing are
   // identical whether or not the address has an account.
-  inBackground(ctx, sendPasswordReset(env, email));
+  inBackground(ctx, sendPasswordReset(env, email, new URL(request.url).hostname));
   return apiJson({ message: FORGOT_MESSAGE }, { status: 202 });
 }
 

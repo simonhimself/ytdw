@@ -708,6 +708,83 @@ test('an invalid APP_ORIGIN sends nothing and creates no tokens; the request Hos
   assert.ok((await emailTo(email)).text.includes('https://pr-1-ytdw.simons.workers.dev/verify?token='));
 });
 
+// --- Workers Previews: any <name>.previews.ytdw.fyi, nothing else --------------
+const PREVIEW_SUFFIX = 'previews.ytdw.fyi';
+const previewHeaders = (extra = {}) => ({ ...json, 'x-test-preview-suffix': PREVIEW_SUFFIX, ...extra });
+const atHost = (host, path, body, headers) => h.requestAt(host, path, { method: 'POST', headers: { ...json, ...headers }, body: JSON.stringify(body) });
+let previewUser = 0;
+const previewEmail = () => `preview-host-${++previewUser}@example.com`;
+
+test('Turnstile hostname allowlist: "*.previews.ytdw.fyi" matches exactly one extra label; exact entries behave as before', async () => {
+  const allowed = {
+    '*.previews.ytdw.fyi': [
+      ['feat-preview-any-branch.previews.ytdw.fyi', true], ['a.previews.ytdw.fyi', true], ['0-9-z.previews.ytdw.fyi', true],
+      ['previews.ytdw.fyi', false], ['a.b.previews.ytdw.fyi', false], ['x.previews.ytdw.fyi.evil.com', false],
+      ['evilpreviews.ytdw.fyi', false], ['.previews.ytdw.fyi', false], ['a.previews.ytdw.fyi.', false],
+      ['A.previews.ytdw.fyi', false], ['a_b.previews.ytdw.fyi', false], ['a b.previews.ytdw.fyi', false],
+      ['a.previews.ytdw.fyi:8443', false], ['a-ytdw.simons.workers.dev', false], ['ytdw.fyi', false], ['localhost', false],
+    ],
+    // Without the wildcard entry, Preview hostnames are rejected; exact entries stay exact.
+    'ytdw.fyi,www.ytdw.fyi': [['a.previews.ytdw.fyi', false], ['ytdw.fyi', true], ['www.ytdw.fyi', true], ['sub.ytdw.fyi', false]],
+    'ytdw.fyi,*.previews.ytdw.fyi': [['ytdw.fyi', true], ['a.previews.ytdw.fyi', true], ['b.ytdw.fyi', false]],
+  };
+  for (const [entries, table] of Object.entries(allowed)) {
+    for (const [hostname, accepted] of table) {
+      const response = await call('/api/auth/signup', { method: 'POST', body: credentials(previewEmail(), 'correct horse', `fixture-auth@${hostname}`), headers: { 'x-test-turnstile-hostnames': entries } });
+      assert.equal(response.status, accepted ? 201 : 403, `${JSON.stringify(entries)} vs ${JSON.stringify(hostname)}`);
+    }
+  }
+});
+
+test('Preview emails link to the request host only when it is exactly one label under PREVIEW_HOST_SUFFIX', async () => {
+  // APP_ORIGIN is unset in Previews, so a non-matching host sends nothing.
+  const unset = { 'x-test-app-origin': 'unset' };
+  const host = 'feat-any-branch.previews.ytdw.fyi';
+  const verify = previewEmail();
+  assert.equal((await atHost(host, '/api/auth/signup', credentials(verify), previewHeaders(unset))).status, 201);
+  assert.ok((await emailTo(verify)).text.includes(`https://${host}/verify?token=`));
+
+  const dupe = previewEmail();
+  await atHost(host, '/api/auth/signup', credentials(dupe), previewHeaders(unset));
+  await emailTo(dupe, 1);
+  assert.equal((await atHost(host, '/api/auth/signup', credentials(dupe), previewHeaders(unset))).status, 409);
+  assert.ok((await emailTo(dupe, 2)).text.includes(`https://${host}/?auth=forgot`));
+
+  const reset = previewEmail();
+  await atHost(host, '/api/auth/signup', credentials(reset), previewHeaders(unset));
+  assert.equal((await atHost(host, '/api/auth/password/forgot', { email: reset, turnstileToken: 'fixture-auth-token' }, previewHeaders(unset))).status, 202);
+  assert.ok((await emailTo(reset, 2)).text.includes(`https://${host}/reset-password?token=`));
+
+  // Resend (a signed-in request) uses the same rule.
+  const resend = previewEmail();
+  const signup = await atHost(host, '/api/auth/signup', credentials(resend), previewHeaders(unset));
+  await emailTo(resend, 1);
+  await emailDb().then(db => db.prepare('UPDATE email_log SET sent_at = sent_at - 7200000 WHERE email = ?').bind(resend).run());
+  assert.equal((await atHost(host, '/api/auth/verify/resend', {}, previewHeaders({ ...unset, cookie: cookieOf(signup) }))).status, 202);
+  assert.ok((await emailTo(resend, 2)).text.includes(`https://${host}/verify?token=`));
+
+  for (const bad of ['evil.com', 'a.b.previews.ytdw.fyi', 'previews.ytdw.fyi', 'x.previews.ytdw.fyi.evil.com', 'localhost', 'a-ytdw.simons.workers.dev']) {
+    const email = previewEmail();
+    assert.equal((await atHost(bad, '/api/auth/signup', credentials(email), previewHeaders(unset))).status, 201, bad);
+    await settle();
+    assert.equal((await emailsTo(email)).length, 0, `no email for Host ${bad}`);
+    // With a valid APP_ORIGIN set, a non-matching host falls back to it and never links to the Host.
+    const fallback = previewEmail();
+    await atHost(bad, '/api/auth/signup', credentials(fallback), previewHeaders({ 'x-test-app-origin': 'https://ytdw.fyi' }));
+    const body = (await emailTo(fallback)).text;
+    assert.ok(body.includes('https://ytdw.fyi/verify?token=') && !body.includes(bad), `${bad}: ${body}`);
+  }
+});
+
+test('production (no PREVIEW_HOST_SUFFIX) ignores the request host and always links to APP_ORIGIN', async () => {
+  for (const host of ['feat-any-branch.previews.ytdw.fyi', 'evil.com', 'localhost']) {
+    const email = previewEmail();
+    assert.equal((await atHost(host, '/api/auth/signup', credentials(email))).status, 201);
+    const body = (await emailTo(email)).text;
+    assert.ok(body.includes('https://ytdw.fyi/verify?token=') && !body.includes(host === 'localhost' ? 'localhost' : host), `${host}: ${body}`);
+  }
+});
+
 test('forgot password answers identically for known and unknown addresses and only emails real accounts', async () => {
   const email = 'forgetful@example.com';
   await signUp(email);

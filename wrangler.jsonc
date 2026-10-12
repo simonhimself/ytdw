@@ -137,11 +137,13 @@
   "previews": {
     "vars": {
       "TURNSTILE_SITEKEY": "0x4AAAAAAE64yf1Lv7dzlttY",
-      // BRANCH-SPECIFIC: these hostnames embed the Preview name
-      // (`feat-accounts-library`). A Preview with another name must update both
-      // vars and add its hostnames to the Turnstile widget.
-      "TURNSTILE_HOSTNAMES": "feat-accounts-library.previews.ytdw.fyi,feat-accounts-library-ytdw.simons.workers.dev",
-      "APP_ORIGIN": "https://feat-accounts-library.previews.ytdw.fyi"
+      // Any Preview name works: one DNS label under previews.ytdw.fyi is accepted
+      // by the Turnstile hostname check, and email links use the request host only
+      // when it matches PREVIEW_HOST_SUFFIX (src/hosts.ts). APP_ORIGIN is
+      // deliberately unset here: a Preview whose host does not match sends no email
+      // rather than linking to the wrong site.
+      "TURNSTILE_HOSTNAMES": "*.previews.ytdw.fyi",
+      "PREVIEW_HOST_SUFFIX": "previews.ytdw.fyi"
     },
     "ai": {
       "binding": "AI"

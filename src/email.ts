@@ -1,3 +1,4 @@
+import { isPreviewHost } from "./hosts";
 import { randomToken, sha256Hex } from "./tokens";
 
 const SENDER = { email: "noreply@ytdw.fyi", name: "YT;DW" };
@@ -16,13 +17,21 @@ interface Message {
   html: string;
 }
 
-// Links are built from the configured APP_ORIGIN var (so Previews can differ from
-// production), never from the request Host, so a forged Host header cannot make us
-// email an attacker-controlled link. The value is validated once per distinct
-// value: it must be a bare https origin; otherwise we log and send nothing.
+// Links are built from the configured APP_ORIGIN var, never from the request Host,
+// so a forged Host header cannot make us email an attacker-controlled link. The
+// value is validated once per distinct value: it must be a bare https origin;
+// otherwise we log and send nothing.
+//
+// The one exception is Workers Previews, where PREVIEW_HOST_SUFFIX is set (only in
+// `previews.vars`; production leaves it unset, so Host is ignored there). The
+// request host is used only if it is exactly one label + "." + that suffix, which
+// the Preview custom domain guarantees is one of our own Previews. Anything else
+// falls back to APP_ORIGIN, which Previews leave unset, so nothing is sent.
 const originChecks = new Map<string, string | null>();
 
-function appOrigin(env: Env): string | null {
+// PREVIEW_HOST_SUFFIX exists only in `previews.vars`, so wrangler types omit it.
+function appOrigin(env: Env & { PREVIEW_HOST_SUFFIX?: string }, requestHostname: string): string | null {
+  if (isPreviewHost(requestHostname, env.PREVIEW_HOST_SUFFIX)) return `https://${requestHostname}`;
   const raw = String(env.APP_ORIGIN ?? "");
   if (originChecks.has(raw)) return originChecks.get(raw) ?? null;
   let origin: string | null = null;
@@ -101,8 +110,8 @@ async function deliver(env: Env, to: string, kind: EmailKind, origin: string, to
   }
 }
 
-async function issueAndSend(env: Env, user: { id: string; email: string }, kind: EmailKind): Promise<void> {
-  const origin = appOrigin(env);
+async function issueAndSend(env: Env, user: { id: string; email: string }, kind: EmailKind, hostname: string): Promise<void> {
+  const origin = appOrigin(env, hostname);
   if (!origin) return;
   if (!(await reserveSend(env, user.email, kind))) return;
   // The duplicate-signup notice carries no token: a stranger who tries to sign up
@@ -111,16 +120,17 @@ async function issueAndSend(env: Env, user: { id: string; email: string }, kind:
   await deliver(env, user.email, kind, origin, token);
 }
 
-export const sendVerification = (env: Env, user: { id: string; email: string }) => issueAndSend(env, user, "verify");
+// `hostname` is the incoming request's hostname, captured before the background work starts.
+export const sendVerification = (env: Env, user: { id: string; email: string }, hostname: string) => issueAndSend(env, user, "verify", hostname);
 
-export async function sendPasswordReset(env: Env, email: string): Promise<void> {
+export async function sendPasswordReset(env: Env, email: string, hostname: string): Promise<void> {
   const user = await env.DB.prepare("SELECT id, email FROM users WHERE email = ?").bind(email).first<{ id: string; email: string }>();
-  if (user) await issueAndSend(env, user, "reset");
+  if (user) await issueAndSend(env, user, "reset", hostname);
 }
 
-export async function sendDuplicateNotice(env: Env, email: string): Promise<void> {
+export async function sendDuplicateNotice(env: Env, email: string, hostname: string): Promise<void> {
   const user = await env.DB.prepare("SELECT id, email FROM users WHERE email = ?").bind(email).first<{ id: string; email: string }>();
-  if (user) await issueAndSend(env, user, "duplicate");
+  if (user) await issueAndSend(env, user, "duplicate", hostname);
 }
 
 // Email work runs after the response so timing cannot reveal whether an
