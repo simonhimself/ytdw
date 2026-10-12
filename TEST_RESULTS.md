@@ -317,9 +317,15 @@ checks for this release follow the table.
   `transcript_sources` counts, readable via `GET /stats` with the diagnostic
   token (401 otherwise). The test asserts browser/sandbox counts and that a
   rejected video records nothing. Still 13 passing tests.
-- Production verification pending (not yet deployed). The live check must use
-  a video not summarized in the previous 24 hours (cached results bypass both
-  paths) and confirm `transcript_source` reports `browser`.
+- **Production verification passed.** Deployed as version
+  `2fdc97d8-db57-4e23-a348-800877a96b90` (commit `7e838e0`) with
+  `--containers-rollout=none`; the `BROWSER` binding is active. A live browser
+  submission of uncached `iG9CE55wbtY` returned a complete brief: the request took
+  35.4 s in total, and logs show `transcript_source` `browser` with
+  `ms: 3487` (metadata plus caption download). No Sandbox events and no
+  `browser_transcript_failed` occurred for that request; the rest of the time was
+  Workers AI summarization. `/stats` was not exercised in production because the
+  diagnostic token is a secret not available to the agent.
 
 ### Compact centered result logo — local validation
 
