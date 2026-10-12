@@ -72,9 +72,9 @@
     {
       "binding": "DB",
       "database_name": "ytdw",
-      // PLACEHOLDER: replace with the real id printed by `wrangler d1 create ytdw`
-      // before deploying. Local dev and tests do not use it.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // Production accounts database. Apply migrations/ with --remote before
+      // deploying code that depends on them (docs/OPERATIONS.md).
+      "database_id": "e0f2c9bf-c8d5-4405-8cbc-f1aa5c1256c6",
       "migrations_dir": "migrations"
     }
   ],
