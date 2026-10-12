@@ -793,7 +793,12 @@
       active ? `${active} ${active === 1 ? "video" : "videos"} in progress` : "",
       failed ? `${failed} failed` : "",
     ].filter(Boolean).join(", "));
+    // A single-bar summary is not saved and does not use the daily quota: with nothing
+    // queued, the menu says neither.
+    const queued = queueItems.length > 0;
+    byId("queue-head").textContent = queued ? "In progress · queued briefs go to your library" : "In progress";
     byId("queue-quota").textContent = queueQuota ? `${queueQuota.remaining} of ${queueQuota.limit} left today` : "";
+    byId("queue-quota").hidden = !queued || !queueQuota;
     // Polling re-renders every few seconds: leave the rows alone when nothing changed, so
     // keyboard focus and screen-reader position survive.
     const list = byId("queue-list");

@@ -864,6 +864,7 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 .queue-item__video:hover { text-decoration: underline; }
 .queue-item__state { display: block; margin-top: 2px; color: var(--kumo-text-subtle); font-size: var(--kumo-text-xs); }
 .queue-item__state.is-failed { color: var(--kumo-text-danger); }
+.queue-popover [hidden] { display: none; }
 .queue-item__actions { display: flex; flex: 0 0 auto; gap: 2px; }
 .queue-item__actions button { min-height: 32px; padding: 0 8px; color: var(--kumo-text-strong); background: none; border: 0; border-radius: var(--kumo-radius-control); font-size: var(--kumo-text-sm); cursor: pointer; }
 .queue-item__actions button:hover { color: var(--kumo-text-default); background: var(--kumo-recessed); }
