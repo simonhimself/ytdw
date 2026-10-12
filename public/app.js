@@ -25,6 +25,8 @@
   const readButton = byId("read-button");
   const deleteButton = byId("delete-button");
   let currentResult = null;
+  // The single-bar video being summarized on this page; the header queue menu shows it too.
+  let liveSummary = null;
   let currentLibraryItem = null;
   let phase = "idle";
   let submittedUrl = "";
@@ -39,9 +41,14 @@
   let copyInFlight = null;
   let shareInFlight = null;
 
+  // Several pasted links look like one valid URL to the browser; they belong in the queue box.
+  // Links pasted without a separator ("…xyzhttps://…") still count separately.
+  const linksIn = (text) => text.match(/https?:\/\/.*?(?=https?:\/\/|\s|$)/g) ?? [];
   function setSubmitState() {
-    submitButton.disabled = phase !== "idle" || !input.validity.valid;
+    const several = linksIn(input.value).length > 1;
+    submitButton.disabled = phase !== "idle" || !input.validity.valid || several;
     input.readOnly = phase !== "idle";
+    renderSeveralLinks(several);
   }
 
   function showStatus(title, detail) {
@@ -335,8 +342,18 @@
     }
   }
 
+  function videoIdOf(url) {
+    try {
+      const parsed = new URL(url);
+      const id = parsed.hostname === "youtu.be" ? parsed.pathname.split("/")[1] : parsed.searchParams.get("v") ?? parsed.pathname.split("/")[2];
+      return /^[A-Za-z0-9_-]{11}$/.test(id ?? "") ? id : null;
+    } catch { return null; }
+  }
+
   async function runSummary(url, turnstileToken) {
     setPhase("processing");
+    liveSummary = { videoId: videoIdOf(url) };
+    renderQueueMenu();
     try {
       const response = await fetch("/api/summarize", {
         method: "POST",
@@ -357,6 +374,8 @@
       // Never discard a successful brief just because its replacement failed.
       if (currentResult) result.hidden = false;
     } finally {
+      liveSummary = null;
+      renderQueueMenu();
       setPhase("idle");
       submittedUrl = "";
       if (window.turnstile && widgetId !== undefined) window.turnstile.reset(widgetId);
@@ -714,7 +733,6 @@
 
   function renderQueueBox() {
     const signedIn = Boolean(user) && isHomeView;
-    byId("queue-toggle").hidden = !signedIn || !queueBox.hidden;
     if (!signedIn) queueBox.hidden = true;
     queueOpen.setAttribute("aria-expanded", String(!queueBox.hidden));
     const verified = Boolean(user?.emailVerified);
@@ -722,6 +740,7 @@
     queueUrls.disabled = !verified || queueBusy;
     queueSubmit.disabled = !verified || queueBusy || count === 0;
     queueSubmit.textContent = queueBusy ? "Adding…" : count > 0 ? `Add ${count} to queue` : "Add to queue";
+    renderSeveralLinks(linksIn(input.value).length > 1);
     const left = byId("queue-left");
     if (!verified) left.textContent = "Verify your email to queue videos.";
     else if (queueQuota) left.textContent = `${queueQuota.remaining} of ${queueQuota.limit} left today`;
@@ -758,22 +777,23 @@
   }
 
   function renderQueueMenu() {
-    const visible = Boolean(user) && queueItems.length > 0;
+    const live = user ? liveSummary : null;
+    const visible = Boolean(user) && (queueItems.length > 0 || Boolean(live));
     queueMenu.hidden = !visible;
     if (!visible) {
       queueMenu.open = false;
       return;
     }
-    const active = queueItems.filter((item) => item.status !== "failed").length;
-    const failed = queueItems.length - active;
+    const active = queueItems.filter((item) => item.status !== "failed").length + (live ? 1 : 0);
+    const failed = queueItems.length + (live ? 1 : 0) - active;
     queueMenu.toggleAttribute("data-active", active > 0);
-    byId("queue-count").textContent = String(queueItems.length);
+    byId("queue-count").textContent = String(active + failed);
     byId("queue-summary").setAttribute("aria-label", [
       active ? `${active} ${active === 1 ? "video" : "videos"} in progress` : "",
       failed ? `${failed} failed` : "",
     ].filter(Boolean).join(", "));
     byId("queue-quota").textContent = queueQuota ? `${queueQuota.remaining} of ${queueQuota.limit} left today` : "";
-    byId("queue-list").replaceChildren(...queueItems.map((item) => {
+    byId("queue-list").replaceChildren(...(live ? [liveRow(live)] : []), ...queueItems.map((item) => {
       const li = document.createElement("li");
       const main = document.createElement("span");
       main.className = "queue-item__main";
@@ -794,6 +814,27 @@
       li.append(main, actions);
       return li;
     }));
+  }
+
+  // The single-bar video runs in this page's request, so it has no Retry or Remove.
+  function liveRow(live) {
+    const li = document.createElement("li");
+    const main = document.createElement("span");
+    main.className = "queue-item__main";
+    const video = document.createElement(live.videoId ? "a" : "span");
+    video.className = "queue-item__video";
+    if (live.videoId) {
+      video.href = `https://www.youtube.com/watch?v=${encodeURIComponent(live.videoId)}`;
+      video.target = "_blank";
+      video.rel = "noopener noreferrer";
+    }
+    video.textContent = live.videoId ? `youtu.be/${live.videoId}` : "This video";
+    const state = document.createElement("span");
+    state.className = "queue-item__state";
+    state.textContent = "Summarizing on this page…";
+    main.append(video, state);
+    li.append(main);
+    return li;
   }
 
   function queueAction(label, item, action) {
@@ -905,6 +946,25 @@
     }));
     list.hidden = problems.length === 0;
   }
+
+  // Several links in the single bar: offer to move them into the queue box.
+  const severalHint = byId("several-links");
+  function renderSeveralLinks(several) {
+    const show = several && isHomeView && phase === "idle";
+    severalHint.hidden = !show;
+    // One hint at a time: the several-links offer replaces the general queue link.
+    byId("queue-toggle").hidden = !user || !isHomeView || !queueBox.hidden || show;
+    if (show) byId("several-links-action").textContent = user ? "Queue them instead" : "Sign in to queue them";
+  }
+  byId("several-links-action").addEventListener("click", () => {
+    if (!user) return openAuth({ opener: byId("several-links-action") });
+    const links = linksIn(input.value);
+    const existing = queueLines();
+    queueUrls.value = [...existing, ...links].join("\n");
+    input.value = "";
+    setSubmitState();
+    openQueueBox();
+  });
 
   queueOpen.addEventListener("click", openQueueBox);
   byId("queue-cancel").addEventListener("click", closeQueueBox);

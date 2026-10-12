@@ -374,6 +374,14 @@ it is used, and the library stays a place for finished briefs only.
   Summarizing…, or the failure reason. Failed items offer **Retry** when retryable
   and **Remove**; active items offer **Remove**. On phones the dropdown spans the
   width of the screen.
+- **Single-bar summaries** stay "read now": the brief opens on the page and is
+  saved only when the user presses Save. While one runs, signed-in users also see
+  it in the header menu ("Summarizing on this page…", no actions); it disappears
+  when the request ends, including when the user leaves the page.
+- **Several links in the single bar:** Summarize stays disabled and "That's
+  several links. **Queue them instead**" replaces the "Queue several videos" link;
+  it moves the links into the queue box. Signed out, it reads "Sign in to queue
+  them" and opens the sign-in dialog.
 - **Finishing:** while anything is queued or processing, the client re-checks
   `GET /api/queue` every 10 seconds when the tab is visible (and immediately when
   it becomes visible). When items finish it announces "N briefs are ready in your
