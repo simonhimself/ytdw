@@ -264,6 +264,54 @@ checks for this release follow the table.
   Worker succeeded. A request that reached the previous version during the
   deploy (07:49 UTC) still failed with the old in-Sandbox 429, as expected.
 - One video verified; broader reliability across videos is not yet measured.
+  The owner subsequently confirmed several more videos worked.
+
+### Browser Rendering experiment — October 12, 2026
+
+- Isolated experiment Worker (`/tmp/ytdw-br-test`, `wrangler dev --remote`, never
+  deployed): 16 videos × 2 passes, fresh browser per video, starting from only the
+  video ID. Metadata 16/16 both passes; transcripts 15/15 for videos with an
+  English track. Median total 4.2–4.4 s, nearest-rank p90 6.8 s / 5.2 s, versus
+  ~96 s for the Sandbox path. Includes a 5.3-hour video.
+- Working method: from inside the loaded watch page, call `/youtubei/v1/player`
+  with the IOS client, then fetch the returned caption URL (`fmt=vtt`) from the
+  Worker. The web player's own caption URLs, the player's timedtext requests,
+  and the transcript panel all failed (thin evidence: two debug videos).
+  ANDROID_VR returned LOGIN_REQUIRED for most videos in this context.
+- Independent verification (separate agent): all 15 transcripts character-exact
+  against local yt-dlp (`en-orig` for auto captions); title and duration match on
+  16/16; timings recomputed exactly; no bot wall, consent page, or 429 in raw
+  data; no Worker deployed and no probe process left running.
+- Caveats: one location, ~32 page loads, no concurrency; age-restricted,
+  members-only, and live videos untested. The browser reports `HeadlessChrome`
+  and `navigator.webdriver = true`; no attempt was made to disguise it.
+
+### Browser-first transcripts with Sandbox fallback — October 12, 2026
+
+- `src/youtube-browser.ts` implements the IOS-client method; `src/index.ts`
+  tries it first (30-second budget) and falls back to the Sandbox for any
+  failure except a definite rejection (over six hours). The Worker downloads
+  captions in both paths. `transcript_source` and `browser_transcript_failed`
+  log events record which path ran. New `BROWSER` binding; new dependency
+  `@cloudflare/puppeteer` 1.4.0 (pinned).
+- `npm test`: **13 passed**. New case covers the primary path (no Sandbox run,
+  authored English preferred), translation for a non-English-only video, a
+  browser-reported over-six-hour rejection without fallback, and Sandbox fallback
+  for browser launch failure, bot wall, empty tracks, and a 429 on the
+  browser-derived caption URL. Existing Sandbox tests run with the browser mocked
+  as unavailable. `npm run typecheck` and `git diff --check` passed.
+- Live probe of the real `src/youtube-browser.ts` from Cloudflare
+  (`/tmp/ytdw-br-probe2`, `wrangler dev --remote`, not deployed):
+  `aUrSDMtzsEc`, `dQw4w9WgXcQ`, and `iG9CE55wbtY` returned OK metadata and WEBVTT
+  captions in 3.6–4.6 s (`aUrSDMtzsEc` byte-identical to before, 91,374 bytes).
+  For `9bZkp7q19f0` (Korean-only captions) the IOS response did not offer English
+  translation, so production will use the Sandbox fallback for such videos.
+- `wrangler deploy --dry-run`: bundle 1,280.63 KiB / 265.44 KiB gzip with the
+  `BROWSER` binding. `npm audit` reports high-severity advisories in `basic-ftp`
+  and `extract-zip` via `@cloudflare/puppeteer`'s Node-side `@puppeteer/browsers`
+  tooling; neither package is present in the Worker bundle. Moderate advisories
+  in `hono` and `sharp` also appear in the audit and were not investigated here.
+- Production verification pending (not yet deployed).
 
 ### Compact centered result logo — local validation
 

@@ -17,6 +17,9 @@
   "ai": {
     "binding": "AI"
   },
+  "browser": {
+    "binding": "BROWSER"
+  },
   "ratelimits": [
     {
       "name": "CLIENT_RATE_LIMIT",

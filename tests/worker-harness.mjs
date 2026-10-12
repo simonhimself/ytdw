@@ -23,6 +23,23 @@ const brokenTransports = new Set();
 const slowStartups = new Set();
 const delayedCommands = new Map();
 const captionHosts = new Map();
+// Browser Rendering is "down" unless a test selects a mode for the video, so
+// existing tests exercise the Sandbox fallback exactly as before.
+const browserModes = new Map();
+async function player(id) {
+  counts.browser = (counts.browser || 0) + 1;
+  const mode = browserModes.get(id) ?? 'down';
+  if (mode === 'down') throw new Error('Browser launch failed');
+  const caption = (lang, kind, extra = '') => ({languageCode:lang,kind,baseUrl:'https://www.youtube.com/api/timedtext?v='+id+'&lang='+lang+'&src=browser'+extra});
+  const ok = {status:'OK',videoId:id,title:'Fixture '+id,lengthSeconds:'300',author:'Fixture channel',translatableToEnglish:true,
+    tracks:[caption('de',undefined),caption('en','asr'),caption('en-GB',undefined)]};
+  if (mode === 'ok') return ok;
+  if (mode === 'no-tracks') return {...ok,tracks:[]};
+  if (mode === 'translate') return {...ok,tracks:[caption('ko','asr')]};
+  if (mode === 'long') return {...ok,lengthSeconds:'30000'};
+  if (mode === 'bot-wall') return {status:'LOGIN_REQUIRED',reason:"Sign in to confirm you're not a bot",tracks:[],translatableToEnglish:false};
+  throw new Error('Unknown browser mode '+mode);
+}
 async function exec(command) {
   counts.commands++;
   if (command.includes('python3 --version')) return {success:true,exitCode:0,stdout:'fixture tools',stderr:''};
@@ -52,7 +69,7 @@ async function run(model, input, options) {
   return {response:${JSON.stringify(summary)}};
 }
 export class Coordinator extends BaseCoordinator {
-  constructor(ctx, env) { super(ctx, {...env, Sandbox:{exec}, AI:{run}}); }
+  constructor(ctx, env) { super(ctx, {...env, Sandbox:{exec}, AI:{run}, BROWSER:{player}}); }
   async control(action) {
     if (action === 'clear-budget') this.ctx.storage.sql.exec('DELETE FROM admissions');
     if (action === 'expire-cache') this.ctx.storage.sql.exec('UPDATE completed_summaries SET expires_at = 0');
@@ -82,6 +99,7 @@ export default { async fetch(request, env) {
     if (action === 'break-transport') brokenTransports.add(id);
     if (action === 'slow-startup') slowStartups.add(id);
     if (action === 'foreign-caption-host') captionHosts.set(id, 'evil.example');
+    if (action.startsWith('browser:')) browserModes.set(id, action.slice(8));
     if (action === 'release-startup') {delayedCommands.get(id)?.();delayedCommands.delete(id);}
     if (action === 'release') {held.delete(id);pending.get(id)?.();pending.delete(id);}
     if (action === 'clear-edge') await caches.default.delete(new Request('https://summary-cache.internal/v4/'+id));
@@ -104,7 +122,10 @@ export default { async fetch(request, env) {
     builder.onResolve({ filter: /^production-worker$/ }, () => ({ path: 'production', namespace: 'fixture' }));
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: testSource, loader: 'ts', resolveDir: root }));
     builder.onResolve({ filter: /^@cloudflare\/sandbox$/ }, () => ({ path: 'sandbox', namespace: 'mock' }));
-    builder.onLoad({ filter: /.*/, namespace: 'mock' }, () => ({ contents: 'export const getSandbox = binding => binding; export class Sandbox {}', loader: 'js' }));
+    builder.onResolve({ filter: /youtube-browser$/ }, () => ({ path: 'browser', namespace: 'mock' }));
+    builder.onLoad({ filter: /.*/, namespace: 'mock' }, (args) => ({ loader: 'js', contents: args.path === 'browser'
+      ? 'export const fetchPlayerResponse = (binding, id, timeout) => binding.player(id, timeout);'
+      : 'export const getSandbox = binding => binding; export class Sandbox {}' }));
   } }] });
   let verifications = 0;
   const captionRequests = [];
@@ -125,7 +146,8 @@ export default { async fetch(request, env) {
     const url = new URL(request.url);
     if (url.hostname === 'www.youtube.com' && url.pathname === '/api/timedtext') {
       captionRequests.push(request.url);
-      const status = captionStatuses.get(url.searchParams.get('v'));
+      const id = url.searchParams.get('v');
+      const status = captionStatuses.get(url.searchParams.get('src') === 'browser' ? `browser:${id}` : id);
       if (status) return new Response('Too Many Requests', { status });
       return new Response('WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nTest captions.');
     }
@@ -139,7 +161,8 @@ export default { async fetch(request, env) {
   const control = async (action, id, scope = 'global') => (await request('/__control', { method: 'POST', headers: { 'x-test-scope': scope }, body: JSON.stringify({ action, id }) })).json();
   const post = (id, scope = 'global', headers = {}) => request('/api/summarize', { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-scope': scope, ...headers }, body: JSON.stringify({ url: `https://youtu.be/${id}`, turnstileToken: 'fixture-token' }) });
   return { mf, request, control, post, verifications: () => verifications,
-    captionRequests: () => [...captionRequests], failCaptions: (id, status) => captionStatuses.set(id, status), async reload() {
+    captionRequests: () => [...captionRequests], failCaptions: (id, status) => captionStatuses.set(id, status),
+    failBrowserCaptions: (id, status) => captionStatuses.set(`browser:${id}`, status), async reload() {
     options.workers[0].config.manifest.modules['index.js'].contents += '\n// restart fixture';
     await mf.setOptions(options);
   } };

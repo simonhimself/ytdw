@@ -160,6 +160,50 @@ test('the Worker fetches one vtt caption track; caption 429s retry later; foreig
   assert.equal(h.captionRequests().length, before);
 });
 
+test('Browser Rendering is the primary transcript source and every browser failure falls back to the Sandbox', async () => {
+  const media = async () => (await h.control('stats')).mediaStarts;
+  const fetchedFor = id => h.captionRequests().filter(url => url.includes(`v=${id}&`));
+  const run = async (id, mode, scope) => {
+    await h.control(`browser:${mode}`, id, scope);
+    const before = await media();
+    const response = await h.post(id, scope);
+    return { response, sandboxRuns: (await media()) - before };
+  };
+
+  // Primary path: authored English beats English auto-captions; no Sandbox work.
+  const ok = video(70);
+  const primary = await run(ok, 'ok', 'browser-ok');
+  assert.equal(primary.response.status, 200);
+  assert.equal((await primary.response.json()).title, `Fixture ${ok}`);
+  assert.equal(primary.sandboxRuns, 0);
+  assert.deepEqual(fetchedFor(ok), [`https://www.youtube.com/api/timedtext?v=${ok}&lang=en-GB&src=browser&fmt=vtt`]);
+
+  // Only a non-English track: use YouTube's English translation, as yt-dlp's "en" does.
+  const translated = video(71);
+  const translation = await run(translated, 'translate', 'browser-translate');
+  assert.equal(translation.response.status, 200);
+  assert.equal(translation.sandboxRuns, 0);
+  assert.deepEqual(fetchedFor(translated), [`https://www.youtube.com/api/timedtext?v=${translated}&lang=ko&src=browser&tlang=en&fmt=vtt`]);
+
+  // Definite rejections from browser metadata are final: no fallback, no download.
+  const long = video(72);
+  const tooLong = await run(long, 'long', 'browser-long');
+  assert.equal(tooLong.response.status, 400);
+  assert.match((await tooLong.response.json()).error, /six hours/);
+  assert.equal(tooLong.sandboxRuns, 0);
+  assert.deepEqual(fetchedFor(long), []);
+
+  // Browser unavailable, bot-walled, no tracks, or a rejected caption download: Sandbox fallback.
+  h.failBrowserCaptions(video(76), 429);
+  for (const [n, mode] of [[73, 'down'], [74, 'bot-wall'], [75, 'no-tracks'], [76, 'ok']]) {
+    const id = video(n);
+    const fallback = await run(id, mode, `browser-fallback-${mode}-${n}`);
+    assert.equal(fallback.response.status, 200, `fallback for ${mode}`);
+    assert.equal(fallback.sandboxRuns, 1, `one Sandbox run for ${mode}`);
+    assert.equal(fetchedFor(id).at(-1), `https://www.youtube.com/api/timedtext?v=${id}&lang=en-orig&fmt=vtt`);
+  }
+});
+
 test('diagnostics fail closed and extraction endpoints cannot bypass the queue', async () => {
   const calls = (await h.control('stats')).commands;
   for (const endpoint of ['/metadata', '/captions']) {

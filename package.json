@@ -11,6 +11,7 @@
     "test:ui": "playwright test"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "1.4.0",
     "@cloudflare/sandbox": "0.12.1"
   },
   "devDependencies": {

@@ -55,6 +55,12 @@ a way to prefill the original video URL and generate another brief.
 
 - Public English-captioned videos only, up to six hours long.
 - Maximum transcript input: 400,000 characters.
+- Transcript source: Browser Rendering first (one fresh browser per new video,
+  30-second budget), then the single Sandbox container as fallback. Each success
+  logs `transcript_source` (`browser` or `sandbox`) and each browser failure logs
+  `browser_transcript_failed`; use these to judge whether the Sandbox can be retired.
+- Browser Rendering limits: 10 concurrent browsers and 10 new browsers per minute
+  per account; Workers Paid includes 10 browser-hours per month.
 - One Sandbox container with globally coordinated work.
 - One active processing job and at most two waiting jobs.
 - Waiting jobs expire after 90 seconds.

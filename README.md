@@ -30,16 +30,21 @@ doesn’t extend it. Raw transcripts are discarded after processing.
 flowchart LR
     URL[YouTube URL] --> API[Worker API]
     API --> Queue[Durable Object coordinator]
-    Queue --> Captions[Sandbox: retrieve captions]
+    Queue --> Browser[Browser Rendering: find captions]
+    Browser -. fallback .-> Sandbox[Sandbox yt-dlp: find captions]
+    Browser --> Captions[Worker: download captions]
+    Sandbox --> Captions
     Captions --> AI[Workers AI: summarize]
     AI --> Brief[Reading brief]
     Queue -. cached result .-> Brief
     Brief --> Share[24-hour share snapshot]
 ```
 
-A small HTML, CSS, and JavaScript frontend sits on a Cloudflare Worker. Sandbox
-runs `yt-dlp` to retrieve captions, and Workers AI creates the brief with
-GLM 5.3 Flash. Turnstile and rate limits protect generation requests.
+A small HTML, CSS, and JavaScript frontend sits on a Cloudflare Worker. Browser
+Rendering finds the video's details and caption track in a few seconds; if that
+fails, a Sandbox container running `yt-dlp` does it instead. The Worker downloads
+the captions, and Workers AI creates the brief with GLM 5.3 Flash. Turnstile and
+rate limits protect generation requests.
 
 Three engineering choices keep the public app manageable:
 

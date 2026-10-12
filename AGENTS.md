@@ -12,11 +12,16 @@ application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 - `public/index.html` contains the single-page UI structure.
 - `public/app.js` contains client behavior; `public/theme.js` sets the initial theme.
 - `public/styles.css` contains the Kumo-based light and dark themes.
-- `Dockerfile` defines the Sandbox image that runs `yt-dlp`.
+- `src/youtube-browser.ts` gets video metadata and caption URLs via Browser
+  Rendering (primary path). Tests mock this module; live behavior must be
+  checked against real YouTube.
+- `Dockerfile` defines the Sandbox image that runs `yt-dlp`, now only as the
+  metadata fallback when the browser path fails. The Worker downloads captions
+  itself in both paths.
 - `wrangler.jsonc` is the source of truth for Cloudflare bindings and deployment.
 - `wrangler.legacy.jsonc` is historical only; its deployment was retired on 2026-09-18.
 
-The Worker uses Cloudflare Workers, Sandbox, Durable Objects, Workers AI,
+The Worker uses Cloudflare Workers, Browser Rendering, Sandbox, Durable Objects, Workers AI,
 Turnstile, rate limits, static assets, and the Cache API.
 
 ## Commands

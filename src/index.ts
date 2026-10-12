@@ -1,5 +1,6 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { DurableObject } from "cloudflare:workers";
+import { fetchPlayerResponse, type BrowserPlayerResponse } from "./youtube-browser";
 
 export { Sandbox } from "@cloudflare/sandbox";
 
@@ -11,6 +12,7 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 const MODEL = "@cf/zai-org/glm-5.3-flash";
 const COMMAND_TIMEOUT = 120_000;
+const BROWSER_TIMEOUT_MS = 30_000;
 // android_vr needs no PO token for metadata and still lists automatic captions
 // (https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). Switching clients did
 // not fix caption 429s on its own; see fetchCaptions.
@@ -269,6 +271,44 @@ function selectEnglishCaptionUrl(metadata: Record<string, unknown>): string | nu
     if (language) return tracks.get(language)!;
   }
   return null;
+}
+
+function selectBrowserCaptionUrl(player: BrowserPlayerResponse): string | null {
+  // Same preference as selectEnglishCaptionUrl: authored English, then English
+  // auto-captions (the player API names the original ASR track "en").
+  for (const automatic of [false, true]) {
+    const tracks = new Map(
+      player.tracks
+        .filter((track) => /^en(?:[-_][A-Za-z0-9]+)*$/.test(track.languageCode) && (track.kind === "asr") === automatic)
+        .map((track) => [track.languageCode, track.baseUrl] as const),
+    );
+    const language = tracks.has("en") ? "en" : [...tracks.keys()].sort()[0];
+    if (language) return tracks.get(language)!;
+  }
+  // No English track: match yt-dlp's automatic "en" entry, which is YouTube's
+  // machine translation of the original track.
+  const source = player.tracks.find((track) => track.kind === "asr") ?? player.tracks[0];
+  if (!player.translatableToEnglish || !source) return null;
+  const url = new URL(source.baseUrl);
+  url.searchParams.set("tlang", "en");
+  return url.href;
+}
+
+async function extractMetadataWithBrowser(env: Env, videoId: string, deadline: number): Promise<ExtractedVideoMetadata> {
+  const timeout = Math.min(BROWSER_TIMEOUT_MS, deadline - Date.now());
+  if (timeout < 1000) throw new Error("Browser metadata timed out");
+  const player = await fetchPlayerResponse(env.BROWSER, videoId, timeout);
+  const duration = Number(player.lengthSeconds);
+  if (player.status !== "OK" || player.videoId !== videoId || typeof player.title !== "string" || !Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Browser player response unusable: ${player.status ?? "no status"}${player.reason ? ` (${player.reason})` : ""}`);
+  }
+  const captionUrl = selectBrowserCaptionUrl(player);
+  // An empty track list may be YouTube hiding captions from this client rather
+  // than a captionless video, so let the Sandbox make the final call.
+  if (!captionUrl) throw new Error("Browser player response listed no usable caption track");
+  const url = new URL(captionUrl);
+  url.searchParams.set("fmt", "vtt");
+  return { id: videoId, title: player.title, duration, uploader: player.author, captionUrl: url.href };
 }
 
 async function extractMetadata(
@@ -579,15 +619,37 @@ function commandBudget(deadline: number): number {
 }
 
 async function summarizeVideo(videoUrl: string, env: Env, deadline = Date.now() + PROCESSING_TIMEOUT_MS): Promise<SummaryResult> {
-  const sandbox = getSandbox(env.Sandbox, "summarizer", {
-    enableDefaultSession: false,
-    transport: "rpc",
-  });
-  const { captionUrl, ...metadata } = await extractMetadata(sandbox, videoUrl, deadline);
-  if (metadata.duration > MAX_VIDEO_SECONDS) {
-    throw new BadRequestError("Videos longer than six hours are not supported");
+  const videoId = new URL(videoUrl).searchParams.get("v")!;
+  const started = Date.now();
+  const rejectLong = (duration: number) => {
+    if (duration > MAX_VIDEO_SECONDS) throw new BadRequestError("Videos longer than six hours are not supported");
+  };
+  // Browser Rendering first (seconds); the yt-dlp Sandbox (over a minute) is the
+  // fallback whenever the browser path fails for any reason other than a
+  // definite user-facing rejection. transcript_source logs measure how often
+  // the fallback runs, to decide whether the Sandbox can be retired.
+  let source: "browser" | "sandbox" = "browser";
+  let video: { metadata: VideoMetadata; captions: string } | null = null;
+  try {
+    const { captionUrl, ...metadata } = await extractMetadataWithBrowser(env, videoId, deadline);
+    rejectLong(metadata.duration);
+    video = { metadata, captions: await fetchCaptions(captionUrl, deadline) };
+  } catch (error) {
+    if (error instanceof BadRequestError) throw error;
+    console.warn(JSON.stringify({ event: "browser_transcript_failed", videoId, message: error instanceof Error ? error.message : String(error) }));
   }
-  const captions = await fetchCaptions(captionUrl, deadline);
+  if (!video) {
+    source = "sandbox";
+    const sandbox = getSandbox(env.Sandbox, "summarizer", {
+      enableDefaultSession: false,
+      transport: "rpc",
+    });
+    const { captionUrl, ...metadata } = await extractMetadata(sandbox, videoUrl, deadline);
+    rejectLong(metadata.duration);
+    video = { metadata, captions: await fetchCaptions(captionUrl, deadline) };
+  }
+  console.log(JSON.stringify({ event: "transcript_source", videoId, source, ms: Date.now() - started }));
+  const { metadata, captions } = video;
   const transcript = fitTranscript(captionsToText(captions));
   if (!transcript.text) throw new BadRequestError("The captions were empty");
 
