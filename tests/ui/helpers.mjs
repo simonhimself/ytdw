@@ -177,3 +177,61 @@ export async function mockAccount(page, { user = null, items = [], authResponse,
   });
   return state;
 }
+
+// Stateful fake of /api/queue on top of mockAccount's state. `results` can override the
+// per-URL outcome by video id (for example { abcdefghijk: 'alreadySaved' }).
+export function queueItem(id, videoId, overrides = {}) {
+  return { id, videoId, status: 'queued', error: null, retryable: true, attempts: 0, createdAt: Date.UTC(2026, 9, 12, 12), ...overrides };
+}
+
+export async function mockQueue(page, account, { items = [], used = 0, results = {} } = {}) {
+  const queue = { items: items.map(item => ({ ...item })), used, requests: [] };
+  const quota = () => ({ used: queue.used, limit: 50, remaining: 50 - queue.used });
+  const videoIdOf = url => {
+    try {
+      const parsed = new URL(url.trim());
+      if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(parsed.hostname)) return null;
+      const id = parsed.hostname === 'youtu.be' ? parsed.pathname.slice(1) : parsed.searchParams.get('v');
+      return /^[A-Za-z0-9_-]{11}$/.test(id ?? '') ? id : null;
+    } catch { return null; }
+  };
+  await page.route(url => url.pathname === '/api/queue' || url.pathname.startsWith('/api/queue/'), async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method();
+    const [, , , id, action] = url.pathname.split('/');
+    queue.requests.push({ method, path: url.pathname, body: method === 'GET' ? undefined : request.postDataJSON(), contentType: request.headers()['content-type'] });
+    if (!account.user) return route.fulfill({ status: 401, json: { error: 'Sign in to use your queue.' } });
+    if (method === 'GET') return route.fulfill({ json: { items: queue.items, quota: quota() } });
+    if (method === 'POST' && !id) {
+      if (!account.user.emailVerified) return route.fulfill({ status: 403, json: { error: 'Verify your email to queue videos.' } });
+      const seen = new Set();
+      const out = request.postDataJSON().urls.map(raw => {
+        const videoId = videoIdOf(raw);
+        if (!videoId) return { url: raw.trim(), videoId: null, status: 'invalid', error: 'Enter a valid YouTube video URL' };
+        if (seen.has(videoId)) return { url: raw.trim(), videoId, status: 'duplicate' };
+        seen.add(videoId);
+        const status = results[videoId] ?? (queue.used >= 50 ? 'overQuota' : 'queued');
+        if (status === 'queued') {
+          queue.used++;
+          queue.items.push(queueItem(`00000000-0000-4000-8000-${String(queue.items.length + 100).padStart(12, '0')}`, videoId));
+        }
+        return { url: raw.trim(), videoId, status };
+      });
+      return route.fulfill({ json: { results: out, items: queue.items, quota: quota() } });
+    }
+    const item = queue.items.find(candidate => candidate.id === id);
+    if (!item) return route.fulfill({ status: 404, json: { error: 'Queue item not found.' } });
+    if (method === 'POST' && action === 'retry') {
+      if (item.status !== 'failed' || !item.retryable) return route.fulfill({ status: 409, json: { error: 'Only failed videos that may succeed later can be retried.' } });
+      Object.assign(item, { status: 'queued', error: null, attempts: 0 });
+      return route.fulfill({ json: { item } });
+    }
+    if (method === 'DELETE') {
+      queue.items = queue.items.filter(candidate => candidate !== item);
+      return route.fulfill({ status: 204, body: '' });
+    }
+    return route.fulfill({ status: 405, json: { error: 'Method not allowed' } });
+  });
+  return queue;
+}

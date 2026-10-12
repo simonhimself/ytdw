@@ -19,6 +19,17 @@
       <span>YT</span><span class="wordmark__semicolon">;</span><span>DW</span>
     </a>
     <div class="header-actions">
+      <details id="queue-menu" class="queue-menu" hidden>
+        <summary id="queue-summary" aria-label="Queue">
+          <svg class="queue-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="queue-ring__track" cx="10" cy="10" r="7"/><path class="queue-ring__arc" d="M10 3a7 7 0 0 1 7 7"/></svg>
+          <span id="queue-count" aria-hidden="true"></span>
+        </summary>
+        <div class="queue-popover">
+          <p class="queue-popover__head">In progress · finished briefs go to your library</p>
+          <ul id="queue-list" class="queue-list"></ul>
+          <p id="queue-quota" class="queue-popover__foot"></p>
+        </div>
+      </details>
       <a id="library-link" class="header-link" href="/library" hidden>Library<span id="library-badge" class="count-badge" aria-hidden="true" hidden></span></a>
       <button id="sign-in-button" class="header-button" type="button" hidden>Sign in</button>
       <details id="account-menu" class="account-menu" hidden>
@@ -73,6 +84,22 @@
         <div id="turnstile-widget" class="turnstile"></div>
         <p id="turnstile-error" class="turnstile-error" role="alert" hidden></p>
       </form>
+      <p id="queue-toggle" class="queue-toggle" hidden>Got several? <button id="queue-open" class="link-button" type="button" aria-expanded="false" aria-controls="queue-box">Queue several videos</button></p>
+      <form id="queue-box" class="queue-box" hidden novalidate>
+        <label class="queue-box__title" for="queue-urls">Queue several videos</label>
+        <p id="queue-hint" class="queue-box__hint">One YouTube URL per line, up to 10. Briefs land in your library when they’re ready; you can leave this page.</p>
+        <textarea id="queue-urls" rows="4" spellcheck="false" autocapitalize="none" autocomplete="off" aria-describedby="queue-hint queue-error"></textarea>
+        <p id="queue-error" class="queue-box__error" role="alert" hidden></p>
+        <ul id="queue-results" class="queue-results" hidden></ul>
+        <div class="queue-box__row">
+          <span id="queue-left" class="queue-box__left"></span>
+          <span class="queue-box__actions">
+            <button id="queue-cancel" class="link-button queue-box__cancel" type="button">Cancel</button>
+            <button id="queue-submit" class="copy-button" type="submit" disabled>Add to queue</button>
+          </span>
+        </div>
+      </form>
+      <p id="queue-announcement" class="sr-only" role="status" aria-atomic="true"></p>
       <a class="shared-home result-link" href="/">Summarize another video &rarr;</a>
 
       <p id="process-announcement" class="sr-only" role="status" aria-atomic="true"></p>

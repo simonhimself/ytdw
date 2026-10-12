@@ -1,5 +1,19 @@
 # YT;DW Test Results
 
+## Background summary queue, Phase 2 — October 12, 2026
+
+Local validation on branch `feat/summary-queue`; checks Q1–Q10 in `TEST_PLAN.md`.
+Nothing pushed, deployed, or applied to a remote database yet.
+
+- `npm run typecheck` and `git diff --check`: passed.
+- `npm test`: 56 of 56 passed (9 new queue tests).
+- `npm run test:ui`: 256 passed, 8 skipped (32 new queue runs across the four projects).
+- `npm run test:integration`: 10 passed, 2 skipped (demo recordings); the new queue flow
+  passes at desktop and mobile.
+- Visual check of the box and header menu at desktop (light) and mobile (dark) against
+  mocked APIs.
+- Not yet verified: a Workers Preview with real Turnstile, YouTube, and Workers AI.
+
 ## Branch-agnostic Workers Previews — October 12, 2026
 
 - `npm test` 47 of 47, `npm run test:ui` 224 passed (8 skipped captures),

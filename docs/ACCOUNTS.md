@@ -352,17 +352,30 @@ YouTube hosts, an 11-character id), and `duplicate` marks a later line for a
 video already in the same paste. The response is 200 even when nothing was
 queued.
 
-### UI (pending owner confirmation)
+### UI
 
-- Library page: a "Queue videos" box above the tabs (textarea, one URL per line,
-  up to 10, **Add to queue**), with per-line results after submit. Unverified
-  accounts see it disabled with "Verify your email to queue videos" and the
-  existing Resend action. The home page keeps its single-video flow, plus a
-  "Queue several videos" link to the library when signed in.
-- **In progress** section above the tabs, shown only when there are queued,
-  processing, or failed items: each row shows `youtu.be/<id>` (titles are unknown
-  before processing, and the CSP does not allow YouTube thumbnails), its status,
-  and for failures the reason, **Retry** (retryable only), and **Remove**.
-- Finished briefs appear in Unread; the header badge updates. While any item is
-  queued or processing and the page is visible, the library re-checks
-  `GET /api/queue` every 10 seconds and reloads the list when something finishes.
+Agreed with the owner after mockups: nothing new is visible on the page until
+it is used, and the library stays a place for finished briefs only.
+
+- **Home page:** the single-video flow is unchanged. Signed-in users also see
+  "Got several? **Queue several videos**" under the URL field. It opens a box
+  (one URL per line, up to 10) with "N of 50 left today", **Cancel**, and
+  **Add N to queue**; Escape closes it and Cmd/Ctrl+Enter submits. If every line
+  is queued the box closes and a status message confirms it. Otherwise it stays
+  open, lists each line that was not queued (already in library, already queued,
+  listed twice, not a YouTube link, over today's limit), and keeps only the lines
+  worth fixing. Unverified accounts see the box disabled with "Verify your email
+  to queue videos." alongside the existing verify banner.
+- **Header menu:** a spinner with a count appears next to Library only while
+  something is queued, processing, or failed (the ring turns red and stops when
+  only failures remain). It opens a dropdown, like the account menu, listing each
+  item as `youtu.be/<id>` (titles are unknown before processing, and the CSP does
+  not allow YouTube thumbnails) with its state: Queued, Waiting to try again,
+  Summarizing…, or the failure reason. Failed items offer **Retry** when retryable
+  and **Remove**; active items offer **Remove**. On phones the dropdown spans the
+  width of the screen.
+- **Finishing:** while anything is queued or processing, the client re-checks
+  `GET /api/queue` every 10 seconds when the tab is visible (and immediately when
+  it becomes visible). When items finish it announces "N briefs are ready in your
+  library", refreshes the Library badge, and reloads the library list if it is
+  open.

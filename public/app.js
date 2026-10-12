@@ -548,6 +548,7 @@
     if (isLibraryView) libraryLink.setAttribute("aria-current", "page");
     if (isAccountView) byId("account-link").setAttribute("aria-current", "page");
     renderVerifyBanner();
+    renderQueueBox();
   }
 
   // The banner follows signed-in-but-unverified accounts on the main, library, and account views.
@@ -613,6 +614,7 @@
 
   // Pages that depend on the signed-in user re-render whenever it changes.
   function afterSessionChange() {
+    syncQueue();
     if (isAccountView) renderAccountPage();
     if (isVerifyView) renderVerifyPage();
   }
@@ -678,6 +680,303 @@
     } finally {
       button.setAttribute("aria-disabled", "false");
     }
+  });
+
+  // ---- Background queue -----------------------------------------------------------
+  // Verified users paste several URLs into an on-demand box on the home page. Progress
+  // lives in a header menu that only exists while something is queued, processing, or
+  // failed; finished briefs simply land in the library as unread.
+
+  const QUEUE_MAX_URLS = 10;
+  const QUEUE_POLL_MS = 10_000;
+  const queueMenu = byId("queue-menu");
+  const queueBox = byId("queue-box");
+  const queueOpen = byId("queue-open");
+  const queueUrls = byId("queue-urls");
+  const queueSubmit = byId("queue-submit");
+  let queueItems = [];
+  let queueQuota = null;
+  let queueRequest = 0;
+  let queuePollTimer;
+  let queueBusy = false;
+  const queueResultLabels = {
+    queued: "Queued",
+    duplicate: "Listed twice",
+    alreadyQueued: "Already queued",
+    alreadySaved: "Already in library",
+    invalid: "Not a YouTube link",
+    overQuota: "Over today’s limit",
+  };
+
+  function queueLines() {
+    return queueUrls.value.split(/\s+/).map((line) => line.trim()).filter(Boolean);
+  }
+
+  function renderQueueBox() {
+    const signedIn = Boolean(user) && isHomeView;
+    byId("queue-toggle").hidden = !signedIn || !queueBox.hidden;
+    if (!signedIn) queueBox.hidden = true;
+    queueOpen.setAttribute("aria-expanded", String(!queueBox.hidden));
+    const verified = Boolean(user?.emailVerified);
+    const count = queueLines().length;
+    queueUrls.disabled = !verified || queueBusy;
+    queueSubmit.disabled = !verified || queueBusy || count === 0;
+    queueSubmit.textContent = queueBusy ? "Adding…" : count > 0 ? `Add ${count} to queue` : "Add to queue";
+    const left = byId("queue-left");
+    if (!verified) left.textContent = "Verify your email to queue videos.";
+    else if (queueQuota) left.textContent = `${queueQuota.remaining} of ${queueQuota.limit} left today`;
+    else left.textContent = "";
+  }
+
+  function showQueueError(message) {
+    const element = byId("queue-error");
+    element.textContent = message;
+    element.hidden = !message;
+    queueUrls.setAttribute("aria-invalid", String(Boolean(message)));
+  }
+
+  function openQueueBox() {
+    queueBox.hidden = false;
+    showQueueError("");
+    renderQueueBox();
+    (queueUrls.disabled ? queueSubmit : queueUrls).focus();
+    if (user?.emailVerified && !queueQuota) void loadQueue();
+  }
+
+  function closeQueueBox() {
+    queueBox.hidden = true;
+    byId("queue-results").hidden = true;
+    showQueueError("");
+    renderQueueBox();
+    queueOpen.focus();
+  }
+
+  function queueStateText(item) {
+    if (item.status === "processing") return "Summarizing…";
+    if (item.status === "failed") return item.error || "Could not be summarized.";
+    return item.error ? "Waiting to try again" : "Queued";
+  }
+
+  function renderQueueMenu() {
+    const visible = Boolean(user) && queueItems.length > 0;
+    queueMenu.hidden = !visible;
+    if (!visible) {
+      queueMenu.open = false;
+      return;
+    }
+    const active = queueItems.filter((item) => item.status !== "failed").length;
+    const failed = queueItems.length - active;
+    queueMenu.toggleAttribute("data-active", active > 0);
+    byId("queue-count").textContent = String(queueItems.length);
+    byId("queue-summary").setAttribute("aria-label", [
+      active ? `${active} ${active === 1 ? "video" : "videos"} in progress` : "",
+      failed ? `${failed} failed` : "",
+    ].filter(Boolean).join(", "));
+    byId("queue-quota").textContent = queueQuota ? `${queueQuota.remaining} of ${queueQuota.limit} left today` : "";
+    byId("queue-list").replaceChildren(...queueItems.map((item) => {
+      const li = document.createElement("li");
+      const main = document.createElement("span");
+      main.className = "queue-item__main";
+      const video = document.createElement("a");
+      video.className = "queue-item__video";
+      video.href = `https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId)}`;
+      video.target = "_blank";
+      video.rel = "noopener noreferrer";
+      video.textContent = `youtu.be/${item.videoId}`;
+      const state = document.createElement("span");
+      state.className = `queue-item__state${item.status === "failed" ? " is-failed" : ""}`;
+      state.textContent = queueStateText(item);
+      main.append(video, state);
+      const actions = document.createElement("span");
+      actions.className = "queue-item__actions";
+      if (item.status === "failed" && item.retryable) actions.append(queueAction("Retry", item, "retry"));
+      actions.append(queueAction("Remove", item, "remove"));
+      li.append(main, actions);
+      return li;
+    }));
+  }
+
+  function queueAction(label, item, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.setAttribute("aria-label", `${label} youtu.be/${item.videoId}`);
+    button.addEventListener("click", () => void runQueueAction(button, item, action));
+    return button;
+  }
+
+  function scheduleQueuePoll() {
+    clearTimeout(queuePollTimer);
+    if (!user || !queueItems.some((item) => item.status !== "failed")) return;
+    queuePollTimer = setTimeout(() => {
+      if (document.visibilityState === "visible") void loadQueue();
+      else scheduleQueuePoll();
+    }, QUEUE_POLL_MS);
+  }
+
+  // Briefs that left the active queue may have landed in the library.
+  function applyQueue(data) {
+    const previous = new Set(queueItems.filter((item) => item.status !== "failed").map((item) => item.id));
+    queueItems = Array.isArray(data.items) ? data.items : [];
+    if (data.quota && Number.isFinite(data.quota.remaining)) queueQuota = data.quota;
+    const stillActive = new Set(queueItems.filter((item) => item.status !== "failed").map((item) => item.id));
+    const finished = [...previous].filter((id) => !stillActive.has(id) && !queueItems.some((item) => item.id === id)).length;
+    renderQueueMenu();
+    renderQueueBox();
+    scheduleQueuePoll();
+    if (finished > 0) {
+      announceAccount(`${finished} ${finished === 1 ? "brief is" : "briefs are"} ready in your library.`);
+      if (isLibraryView && !new URLSearchParams(location.search).get("item")) void routeLibrary(false);
+      else void refreshCounts();
+    }
+  }
+
+  async function loadQueue() {
+    if (!user) return;
+    const request = ++queueRequest;
+    try {
+      const response = await apiRequest("/api/queue");
+      if (request !== queueRequest || !user) return;
+      if (response.status === 401) return endSession();
+      if (!response.ok) return scheduleQueuePoll();
+      applyQueue(await responseData(response));
+    } catch {
+      if (request === queueRequest) scheduleQueuePoll();
+    }
+  }
+
+  function syncQueue() {
+    if (user) void loadQueue();
+    else {
+      queueRequest++;
+      clearTimeout(queuePollTimer);
+      queueItems = [];
+      queueQuota = null;
+      renderQueueMenu();
+      renderQueueBox();
+    }
+  }
+
+  async function runQueueAction(button, item, action) {
+    if (button.getAttribute("aria-disabled") === "true") return;
+    button.setAttribute("aria-disabled", "true");
+    const label = `youtu.be/${item.videoId}`;
+    try {
+      const response = await apiRequest(`/api/queue/${encodeURIComponent(item.id)}${action === "retry" ? "/retry" : ""}`, {
+        method: action === "retry" ? "POST" : "DELETE",
+        body: action === "retry" ? {} : undefined,
+      });
+      if (response.status === 401) {
+        endSession();
+        announceAccount("Your session has ended. Sign in again.");
+        return signInButton.focus();
+      }
+      // 404: already gone (another tab removed it, or it finished); 409: no longer retryable.
+      if (!response.ok && response.status !== 404 && response.status !== 409) {
+        throw new Error(await failureMessage(response, "That didn’t work. Please try again."));
+      }
+      // A removed item must not be announced as a finished brief.
+      if (action === "remove") queueItems = queueItems.filter((entry) => entry.id !== item.id);
+      announceAccount(action === "retry" ? `Retrying ${label}.` : `Removed ${label}.`);
+    } catch (requestError) {
+      announceAccount(requestFailureMessage(requestError, "That didn’t work. Please try again."));
+    }
+    await loadQueue();
+    if (!queueMenu.hidden && queueMenu.open) {
+      // The row was re-rendered; keep keyboard focus inside the menu.
+      (queueMenu.querySelector(".queue-item__actions button") ?? byId("queue-summary")).focus();
+    } else if (queueMenu.hidden) {
+      (isHomeView ? input : libraryLink).focus();
+    }
+  }
+
+  function renderQueueResults(results) {
+    const list = byId("queue-results");
+    const problems = results.filter((entry) => entry.status !== "queued");
+    list.replaceChildren(...problems.map((entry) => {
+      const li = document.createElement("li");
+      if (entry.status === "invalid" || entry.status === "overQuota") li.className = "is-problem";
+      const label = document.createElement("strong");
+      label.textContent = queueResultLabels[entry.status] ?? entry.status;
+      const url = document.createElement("span");
+      url.textContent = entry.videoId ? `youtu.be/${entry.videoId}` : entry.url;
+      li.append(label, url);
+      return li;
+    }));
+    list.hidden = problems.length === 0;
+  }
+
+  queueOpen.addEventListener("click", openQueueBox);
+  byId("queue-cancel").addEventListener("click", closeQueueBox);
+  queueUrls.addEventListener("input", () => {
+    showQueueError("");
+    renderQueueBox();
+  });
+  queueBox.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeQueueBox();
+    // Cmd/Ctrl+Enter submits from the textarea, where Enter adds a line.
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !queueSubmit.disabled) queueBox.requestSubmit();
+  });
+  queueBox.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (queueBusy || !user?.emailVerified) return;
+    const urls = queueLines();
+    if (urls.length === 0) return showQueueError("Paste at least one YouTube URL.");
+    if (urls.length > QUEUE_MAX_URLS) return showQueueError(`Paste at most ${QUEUE_MAX_URLS} URLs at a time. You have ${urls.length}.`);
+    showQueueError("");
+    queueBusy = true;
+    renderQueueBox();
+    try {
+      const response = await apiRequest("/api/queue", { method: "POST", body: { urls } });
+      if (response.status === 401) {
+        endSession();
+        openAuth({ opener: queueOpen });
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not add these videos. Please try again."));
+      const data = await responseData(response);
+      const results = Array.isArray(data.results) ? data.results : [];
+      queueRequest++;
+      applyQueue(data);
+      const queued = results.filter((entry) => entry.status === "queued").length;
+      const summary = queued > 0
+        ? `${queued} ${queued === 1 ? "video" : "videos"} queued. ${queued === 1 ? "It lands" : "They land"} in your library when ready.`
+        : "Nothing new was queued.";
+      // Keep only the lines that need attention, so a fix-and-resubmit is easy.
+      const keep = results.filter((entry) => entry.status === "invalid" || entry.status === "overQuota").map((entry) => entry.url);
+      queueUrls.value = keep.join("\n");
+      queueBusy = false;
+      if (results.every((entry) => entry.status === "queued")) {
+        closeQueueBox();
+        byId("queue-announcement").textContent = summary;
+      } else {
+        renderQueueResults(results);
+        byId("queue-announcement").textContent = `${summary} ${results.length - queued} of ${results.length} need attention.`;
+        renderQueueBox();
+        queueUrls.focus();
+      }
+    } catch (requestError) {
+      showQueueError(requestFailureMessage(requestError, "Could not add these videos. Please try again."));
+    } finally {
+      if (queueBusy) {
+        queueBusy = false;
+        renderQueueBox();
+      }
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (queueMenu.open && !queueMenu.contains(event.target)) queueMenu.open = false;
+  });
+  queueMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && queueMenu.open) {
+      queueMenu.open = false;
+      byId("queue-summary").focus();
+    }
+  });
+  // Returning to the tab checks right away instead of waiting out the poll.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && queueItems.some((item) => item.status !== "failed")) void loadQueue();
   });
 
   // ---- Auth dialog --------------------------------------------------------------

@@ -157,6 +157,10 @@ a way to prefill the original video URL and generate another brief.
 - Ambiguous extraction failures retain a short recovery barrier instead of
   immediately retrying a potentially running subprocess.
 - Per-client submission and share-read limits reject excess traffic before upstream work.
+- Background queue (signed-in, verified accounts): up to 10 URLs per paste and 50 per
+  user per rolling 24 hours. One `QueueRunner` Durable Object (migration `v4`) feeds
+  them one at a time through the Coordinator, and only when no website job is running
+  or waiting and none started in the last 30 seconds. See `docs/ACCOUNTS.md`.
 
 ## Maintenance and validation
 
