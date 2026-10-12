@@ -222,10 +222,21 @@ export class QueueRunner extends DurableObject<Env> {
     if (due) {
       const claimed = await db.prepare("UPDATE queue_items SET status = 'processing', started_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'")
         .bind(now, now, due.id).run();
-      if (claimed.meta.changes > 0) notBefore = Date.now() + (await this.process(due) ? JOB_GAP_MS : BUSY_RETRY_MS);
+      if (claimed.meta.changes > 0) {
+        // If this handler dies mid-job (a deploy restarts the object), the lease alarm
+        // still wakes the runner to requeue the orphaned row.
+        await this.ctx.storage.setAlarm(now + LEASE_MS);
+        notBefore = Date.now() + (await this.process(due) ? JOB_GAP_MS : BUSY_RETRY_MS);
+      }
     }
-    const next = (await db.prepare("SELECT MIN(next_attempt_at) AS next FROM queue_items WHERE status = 'queued'").first<{ next: number | null }>())?.next;
+    // Wake for the next due item, or for the lease of a row another run left processing.
+    const next = (await db.prepare(
+      `SELECT MIN(at) AS next FROM (
+         SELECT MIN(next_attempt_at) AS at FROM queue_items WHERE status = 'queued'
+         UNION ALL SELECT MIN(started_at) + ? FROM queue_items WHERE status = 'processing')`,
+    ).bind(LEASE_MS).first<{ next: number | null }>())?.next;
     if (next !== null && next !== undefined) await this.ctx.storage.setAlarm(Math.max(next, notBefore));
+    else await this.ctx.storage.deleteAlarm();
   }
 
   // Returns false when the Coordinator was busy and nothing was attempted.

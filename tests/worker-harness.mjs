@@ -104,7 +104,11 @@ export class SharedBrief extends BaseSharedBrief {
   }
 }
 export class QueueRunner extends BaseQueueRunner {
-  async control() { return this.ctx.storage.getAlarm(); }
+  async control(action) {
+    // Runs the alarm now, as if its scheduled time had come.
+    if (action === 'fire') await this.alarm();
+    return this.ctx.storage.getAlarm();
+  }
 }
 export default { async fetch(request, env, ctx) {
   const url = new URL(request.url);
@@ -127,7 +131,7 @@ export default { async fetch(request, env, ctx) {
     if (action === 'release-startup') {delayedCommands.get(id)?.();delayedCommands.delete(id);}
     if (action === 'release') {held.delete(id);pending.get(id)?.();pending.delete(id);}
     if (action === 'clear-edge') await caches.default.delete(new Request('https://summary-cache.internal/v4/'+id));
-    if (action === 'runner:alarm') return Response.json({alarm: await env.QUEUE_RUNNER.getByName('global').control()});
+    if (action.startsWith('runner:')) return Response.json({alarm: await env.QUEUE_RUNNER.getByName('global').control(action.slice(7))});
     if (action.startsWith('share:')) return Response.json(await env.SHARED_BRIEFS.getByName(id).control(action.slice(6)));
     const storage=await env.COORDINATOR.getByName(scope).control(action);
     return Response.json({...counts,pending:[...pending.keys()],...storage});

@@ -1297,6 +1297,34 @@ test('Remove during processing discards the result; restarts requeue orphaned wo
   await waitForQueue(async () => (await h.control('runner:alarm')).alarm === null);
 });
 
+test('a runner restarted mid-job leaves a wake-up for the orphaned row', async () => {
+  const { cookie, userId } = await verifiedUser('queue-orphan@example.com');
+  const lease = 8 * 60 * 1000;
+  await h.control('clear-budget');
+  // While a job runs, the runner's alarm already covers the row's lease.
+  await h.control('hold', video(393));
+  await enqueue(cookie, [youtu(393)]);
+  await waitForQueue(statusIs(userId, 393, 'processing'));
+  const started = (await rowFor(userId, 393)).started_at;
+  assert.equal((await h.control('runner:alarm')).alarm, started + lease);
+  await h.control('release', video(393));
+  await waitForQueue(statusIs(userId, 393, 'done'));
+
+  // A row left processing by a killed run (and no other work) still gets a wake-up.
+  const db = await queueDb();
+  const now = Date.now();
+  await db.prepare("INSERT INTO queue_items(id, user_id, video_id, status, attempts, retryable, created_at, updated_at, next_attempt_at, started_at) VALUES (?, ?, ?, 'processing', 0, 1, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), userId, video(394), now, now, now, now).run();
+  await h.control('runner:fire');
+  assert.equal((await h.control('runner:alarm')).alarm, now + lease);
+  // When that wake-up comes, the row is requeued and finished.
+  await db.prepare('UPDATE queue_items SET started_at = 1 WHERE user_id = ? AND video_id = ?').bind(userId, video(394)).run();
+  await h.control('runner:fire');
+  await waitForQueue(statusIs(userId, 394, 'done'), { tick: () => h.control('clear-budget') });
+  assert.equal((await rowFor(userId, 394)).attempts, 1);
+  await waitForQueue(async () => (await h.control('runner:alarm')).alarm === null);
+});
+
 test('a full library fails the item without retry', async () => {
   const { cookie, userId } = await verifiedUser('queue-full@example.com');
   const db = await queueDb();
