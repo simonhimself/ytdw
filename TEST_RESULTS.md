@@ -1,5 +1,17 @@
 # YT;DW Test Results
 
+## Branch-agnostic Workers Previews — October 12, 2026
+
+- `npm test` 47 of 47, `npm run test:ui` 224 passed (8 skipped captures),
+  `npm run test:integration` 8 passed (2 skipped demo recordings).
+- Preview `feat-preview-any-branch` at `https://feat-preview-any-branch.previews.ytdw.fyi/`
+  with no per-branch config: owner signed in with unknown credentials in a real
+  browser and received "Email or password is incorrect.", proving the real Turnstile
+  widget (listing `ytdw.fyi`, which covers subdomains) and server-side
+  `*.previews.ytdw.fyi` hostname check both accept the Preview host.
+- Automated browsers stall at Turnstile on both the Preview and production, so this
+  check needs a human browser.
+
 ## Accounts and library production release — October 12, 2026
 
 - Created production D1 `ytdw` (`e0f2c9bf-c8d5-4405-8cbc-f1aa5c1256c6`) and applied
