@@ -70,7 +70,7 @@ async function quota(env: Env, userId: string) {
 
 async function listItems(env: Env, userId: string) {
   const { results } = await env.DB.prepare(
-    `SELECT ${ITEM_COLUMNS} FROM queue_items WHERE user_id = ? AND status IN ${ACTIVE} ORDER BY created_at, id LIMIT ?`,
+    `SELECT ${ITEM_COLUMNS} FROM queue_items WHERE user_id = ? AND status IN ${ACTIVE} ORDER BY created_at, rowid LIMIT ?`,
   ).bind(userId, LIST_LIMIT).all<QueueRow>();
   return results.map(toItem);
 }
@@ -212,10 +212,11 @@ export class QueueRunner extends DurableObject<Env> {
       await this.retryLater(row, { ok: false, status: 504, error: "The video took too long to process. Please try again in a moment." });
     }
 
-    // Least recently served user first, then that user's oldest item.
+    // Least recently served user first, then that user's oldest item. Items from one
+    // paste share created_at; rowid keeps them in the order they were pasted.
     const due = await db.prepare(
       `SELECT id, user_id, video_id, attempts FROM queue_items AS q WHERE status = 'queued' AND next_attempt_at <= ?
-       ORDER BY (SELECT COALESCE(MAX(started_at), 0) FROM queue_items WHERE user_id = q.user_id), created_at, id LIMIT 1`,
+       ORDER BY (SELECT COALESCE(MAX(started_at), 0) FROM queue_items WHERE user_id = q.user_id), created_at, rowid LIMIT 1`,
     ).bind(now).first<DueRow>();
     let notBefore = 0;
     if (due) {

@@ -1328,3 +1328,19 @@ test('users cannot see or change each other\'s queue items', async () => {
 });
 // Makes a failed row retryable so a 404 for another user cannot be a 409 in disguise.
 const makeRetryable = async userId => (await queueDb()).prepare("UPDATE queue_items SET retryable = 1 WHERE user_id = ? AND status = 'failed'").bind(userId).run();
+
+test('the runner takes turns between users instead of draining one user first', async () => {
+  const alice = await verifiedUser('queue-turns-a@example.com');
+  const bob = await verifiedUser('queue-turns-b@example.com');
+  await h.control('clear-budget');
+  await h.control('hold', video(500));
+  await enqueue(alice.cookie, [youtu(500), youtu(501), youtu(502)]);
+  await waitForQueue(statusIs(alice.userId, 500, 'processing'));
+  await enqueue(bob.cookie, [youtu(510)]);
+  await h.control('release', video(500));
+  await waitForQueue(async () => [...await rowsOf(alice.userId), ...await rowsOf(bob.userId)].every(row => row.status === 'done'), { tick: () => h.control('clear-budget') });
+  const started = async (userId, n) => (await rowFor(userId, n)).started_at;
+  // Bob's only item ran before Alice's second and third.
+  assert.ok(await started(bob.userId, 510) < await started(alice.userId, 501));
+  assert.ok(await started(bob.userId, 510) < await started(alice.userId, 502));
+});
