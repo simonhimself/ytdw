@@ -21,6 +21,6 @@
     "esbuild": "^0.28.2",
     "miniflare": "^5.20260917.0-alpha",
     "typescript": "^5.9.3",
-    "wrangler": "^4.134.0"
+    "wrangler": "^4.149.0"
   }
 }

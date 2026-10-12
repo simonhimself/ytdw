@@ -54,6 +54,57 @@ host-only, so a session on `ytdw.fyi` does not carry over to `www.ytdw.fyi` or
 `ytdw.simons.workers.dev`. After the first deployment, check sign-up in a real
 browser first: local tests mock the Turnstile widget for the `auth` action.
 
+## Workers Previews
+
+Workers Previews give a branch its own URL, database, and Durable Objects without
+touching production. Wrangler 4.149 or newer is required. The `previews` block in
+`wrangler.jsonc` mirrors every binding the code reads from `env`, pointed at
+preview-safe resources (Previews inherit nothing from the top level).
+
+Deploy or update a Preview from the branch checkout (the name defaults to the git
+branch, but a branch with a slash needs an explicit name):
+
+```bash
+npx wrangler preview --name feat-accounts-library
+```
+
+- **Hostnames.** `https://<name>.previews.ytdw.fyi` (custom domain; `previews.ytdw.fyi`
+  is a Preview-only domain with `enabled: false`, so it never serves production) and
+  `https://<name>-ytdw.simons.workers.dev`. Each deployment also gets a unique URL
+  (`<id>.previews.ytdw.fyi`), which is not in the Turnstile allowlist, so use the
+  Preview URL for click-testing. The Preview URL is public. The session cookie is
+  host-only, so test on the host named in `APP_ORIGIN`, which is also the host
+  that email links point to.
+- **Database.** D1 `ytdw-preview` (id in `previews.d1_databases` and
+  `wrangler.preview-migrations.jsonc`), separate from production. Apply new
+  migrations before previewing code that needs them:
+
+  ```bash
+  npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc
+  ```
+
+- **Secrets.** `TURNSTILE_SECRET` and `TEST_TOKEN` are set once in the Preview base
+  config and copied into each *new* Preview only; changing the base config later does
+  not reach existing Previews (use `wrangler preview secret put NAME --name <preview>`
+  for those). Pipe values through stdin and never commit them:
+
+  ```bash
+  npx wrangler preview base-config secret put TURNSTILE_SECRET
+  ```
+
+- **Branch-specific vars.** `previews.vars.APP_ORIGIN` and `TURNSTILE_HOSTNAMES`
+  contain the Preview name. A Preview with a different name must change them, and
+  its two hostnames must also be added to the Turnstile widget's domains, otherwise
+  the Turnstile check fails.
+- **Other resources.** Rate-limit namespaces use ids `71001`–`71007` (production:
+  `1001`, `1002`, `61003`–`61007`). Email is sent from `noreply@ytdw.fyi` for real, so
+  only use addresses you control. Each Preview gets its own Durable Object
+  namespaces and Sandbox container app (`ytdw_<name>_Sandbox`); container support
+  in Previews is partial, and Browser Rendering is the primary transcript path.
+- **Cleanup.** `npx wrangler preview delete --name <name>` removes the Preview, but
+  its container app can remain: check `npx wrangler containers list` and delete only
+  the one named `ytdw_<name>_Sandbox`.
+
 ## Sharing and retention
 
 After generating a brief, **Share** checks that its snapshot is still available,

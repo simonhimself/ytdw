@@ -5,7 +5,11 @@
   "workers_dev": true,
   "routes": [
     { "pattern": "ytdw.fyi", "custom_domain": true },
-    { "pattern": "www.ytdw.fyi", "custom_domain": true }
+    { "pattern": "www.ytdw.fyi", "custom_domain": true },
+    // Preview-only custom domain: serves <preview-name>.previews.ytdw.fyi for
+    // Workers Previews and never production traffic (enabled: false). Already
+    // applied to the account; listed here so a production deploy keeps it.
+    { "pattern": "previews.ytdw.fyi", "custom_domain": true, "previews_enabled": true, "enabled": false }
   ],
   "main": "src/index.ts",
   "compatibility_date": "2026-08-27",
@@ -123,5 +127,70 @@
       "new_sqlite_classes": ["SharedBrief"],
       "tag": "v3"
     }
-  ]
+  ],
+
+  // Workers Previews (`npx wrangler preview`). Previews inherit nothing from the
+  // top level, so every binding the code reads from `env` is repeated here, pointed
+  // at preview-safe resources. Static assets, migrations, and compatibility
+  // settings stay top-level. Secrets (TURNSTILE_SECRET, TEST_TOKEN) live in the
+  // Preview base config; see docs/OPERATIONS.md.
+  "previews": {
+    "vars": {
+      "TURNSTILE_SITEKEY": "0x4AAAAAAE64yf1Lv7dzlttY",
+      // BRANCH-SPECIFIC: these hostnames embed the Preview name
+      // (`feat-accounts-library`). A Preview with another name must update both
+      // vars and add its hostnames to the Turnstile widget.
+      "TURNSTILE_HOSTNAMES": "feat-accounts-library.previews.ytdw.fyi,feat-accounts-library-ytdw.simons.workers.dev",
+      "APP_ORIGIN": "https://feat-accounts-library.previews.ytdw.fyi"
+    },
+    "ai": {
+      "binding": "AI"
+    },
+    "browser": {
+      "binding": "BROWSER"
+    },
+    // Same limits as production, distinct namespace_ids so Preview traffic never
+    // counts against production buckets.
+    "ratelimits": [
+      { "name": "CLIENT_RATE_LIMIT", "namespace_id": "71001", "simple": { "limit": 3, "period": 60 } },
+      { "name": "GLOBAL_RATE_LIMIT", "namespace_id": "71002", "simple": { "limit": 5, "period": 10 } },
+      { "name": "REQUEST_RATE_LIMIT", "namespace_id": "71003", "simple": { "limit": 10, "period": 60 } },
+      { "name": "SHARE_READ_RATE_LIMIT", "namespace_id": "71004", "simple": { "limit": 60, "period": 60 } },
+      { "name": "SHARE_GLOBAL_RATE_LIMIT", "namespace_id": "71005", "simple": { "limit": 300, "period": 60 } },
+      { "name": "AUTH_RATE_LIMIT", "namespace_id": "71006", "simple": { "limit": 10, "period": 60 } },
+      { "name": "LIBRARY_RATE_LIMIT", "namespace_id": "71007", "simple": { "limit": 120, "period": 60 } }
+    ],
+    // Separate database from production. Keep in sync with
+    // wrangler.preview-migrations.jsonc and apply migrations/ there first.
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "ytdw-preview",
+        "database_id": "49cf5618-6eff-476a-984f-2894c3688405",
+        "migrations_dir": "migrations"
+      }
+    ],
+    "send_email": [
+      { "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytdw.fyi"] }
+    ],
+    // Each Preview gets its own Durable Object namespaces and container app; the
+    // bindings are needed because the code reads them from `env`.
+    "durable_objects": {
+      "bindings": [
+        { "class_name": "Sandbox", "name": "Sandbox" },
+        { "class_name": "Coordinator", "name": "COORDINATOR" },
+        { "class_name": "SharedBrief", "name": "SHARED_BRIEFS" }
+      ]
+    },
+    // Container support in Previews is partial. Browser Rendering is the primary
+    // transcript path; the Sandbox is only the metadata fallback.
+    "containers": [
+      {
+        "class_name": "Sandbox",
+        "image": "registry.cloudflare.com/2423947c3898625c52d1d37070dffd03/ytdw-sandbox@sha256:dc66600b6b8c57db2861d769cf48fb5b9424642479f740883f55ac718cf721a5",
+        "instance_type": "lite",
+        "max_instances": 1
+      }
+    ]
+  }
 }

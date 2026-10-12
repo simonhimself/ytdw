@@ -1,0 +1,16 @@
+{
+  // Migrations-only config for the Workers Preview database. It is never used to
+  // deploy a Worker. Keep it pointed at the same database as `previews.d1_databases`
+  // in wrangler.jsonc. Apply with:
+  //   npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "account_id": "2423947c3898625c52d1d37070dffd03",
+  "d1_databases": [
+    {
+      "binding": "PREVIEW_DB",
+      "database_name": "ytdw-preview",
+      "database_id": "49cf5618-6eff-476a-984f-2894c3688405",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
