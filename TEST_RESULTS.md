@@ -1,5 +1,16 @@
 # YT;DW Test Results
 
+## Single-bar spinner and signed-out prompts production release — October 12, 2026
+
+- Owner reviewed on Preview `feat-queue-single-bar-spinner` and approved; merged as
+  simonhimself/ytdw#7 (client-only, no migration).
+- Deployed with `--containers-rollout=none` as version
+  `0cc395e6-df90-4945-be47-228403d05749`. On `https://ytdw.fyi/`: `/` and `/library`
+  200; the page serves the save callout and several-links hint; `app.js` contains the
+  single-bar spinner row; `GET /api/queue` without a session 401.
+- Cleanup: deleted the Preview, its container app `ytdw_feat-queue-single-bar-spinner_Sandbox`
+  (`a039443d-…`), and the merged branch locally and on GitHub.
+
 ## Single-bar summaries in the queue menu — October 12, 2026
 
 Branch `feat/queue-single-bar-spinner`; check Q9b in `TEST_PLAN.md`.
