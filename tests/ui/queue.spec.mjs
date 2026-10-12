@@ -204,3 +204,70 @@ test('the header menu closes on outside clicks and is gone after sign-out', asyn
   await expect(page.locator('#queue-menu')).toBeHidden();
   await expect(page.locator('#queue-toggle')).toBeHidden();
 });
+
+test('a single-bar summary shows in the header menu while it runs', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account, { items: [queueItem(itemId(1), ids[1])] });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/summarize', async route => {
+    await held;
+    await route.fulfill({ json: { id: ids[0], title: 'First video brief', uploader: 'Example channel', duration: 480, summary: '## Summary: X\n\nY', transcriptTruncated: false, share: null } });
+  });
+  await page.goto('/');
+  await expect(page.locator('#queue-count')).toHaveText('1');
+  await expect.poll(() => page.evaluate(() => Boolean(window.__verification))).toBe(true);
+  await page.getByLabel('YouTube URL', { exact: true }).fill(link(ids[0]));
+  await page.getByRole('button', { name: 'Summarize', exact: true }).click();
+  await expect(page.locator('#queue-count')).toHaveText('2');
+  await expect(page.locator('#queue-summary')).toHaveAttribute('aria-label', '2 videos in progress');
+  await page.locator('#queue-summary').click();
+  const first = page.locator('#queue-list li').first();
+  await expect(first).toContainText(`youtu.be/${ids[0]}`);
+  await expect(first).toContainText('Summarizing on this page…');
+  await expect(first.getByRole('button')).toHaveCount(0);
+  release();
+  await expect(page.locator('#result-title')).toHaveText('First video brief');
+  await expect(page.locator('#queue-count')).toHaveText('1');
+});
+
+test('signed-out visitors never see the menu for a single-bar summary', async ({ page }) => {
+  const account = await mockAccount(page);
+  await mockQueue(page, account);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean(window.__verification))).toBe(true);
+  await page.getByLabel('YouTube URL', { exact: true }).fill(`https://www.youtube.com/watch?v=${ids[0]}`);
+  await page.getByRole('button', { name: 'Summarize', exact: true }).click();
+  await expect(page.locator('#result-title')).toHaveText('First video brief');
+  await expect(page.locator('#queue-menu')).toBeHidden();
+});
+
+test('several links in the single bar are moved into the queue box instead of failing', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account);
+  await page.goto('/');
+  const bar = page.getByLabel('YouTube URL', { exact: true });
+  await bar.fill(`${link(ids[0])} ${link(ids[1])}`);
+  await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeDisabled();
+  const action = page.getByRole('button', { name: 'Queue them instead' });
+  await expect(action).toBeVisible();
+  await expect(page.locator('#queue-toggle')).toBeHidden();
+  await action.click();
+  await expect(bar).toHaveValue('');
+  await expect(page.getByLabel('Queue several videos')).toHaveValue(`${link(ids[0])}\n${link(ids[1])}`);
+  await expect(page.getByRole('button', { name: 'Add 2 to queue' })).toBeVisible();
+  await expect(page.locator('#several-links')).toBeHidden();
+  // One link again: the hint disappears and Summarize works as before.
+  await bar.fill(link(ids[2]));
+  await expect(page.locator('#several-links')).toBeHidden();
+});
+
+test('signed-out visitors with several links are asked to sign in', async ({ page }) => {
+  const account = await mockAccount(page);
+  await mockQueue(page, account);
+  await page.goto('/');
+  await page.getByLabel('YouTube URL', { exact: true }).fill(`${link(ids[0])}${link(ids[1])}`);
+  await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Sign in to queue them' }).click();
+  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible();
+});
