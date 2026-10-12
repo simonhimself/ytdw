@@ -13,9 +13,18 @@ export async function createHarness() {
   const testSource = source.replace('const MAX_QUEUE_WAIT_MS = 90_000;', 'const MAX_QUEUE_WAIT_MS = 1000;')
     .replace('const PROCESSING_TIMEOUT_MS = 6 * 60 * 1000;', 'const PROCESSING_TIMEOUT_MS = 8000;')
     .replace('const RECOVERY_GRACE_MS = 10_000;', 'const RECOVERY_GRACE_MS = 200;')
-    .replace('const COMMAND_TIMEOUT = 120_000;', 'const COMMAND_TIMEOUT = 7000;');
+    .replace('const COMMAND_TIMEOUT = 120_000;', 'const COMMAND_TIMEOUT = 7000;')
+    .replace('const INTERACTIVE_QUIET_MS = 30_000;', 'const INTERACTIVE_QUIET_MS = 300;');
+  // The queue runner's waits are shortened the same way; its logic is unchanged.
+  const queueSource = (await readFile(new URL('../src/queue.ts', import.meta.url), 'utf8'))
+    .replace('const JOB_GAP_MS = 5_000;', 'const JOB_GAP_MS = 20;')
+    .replace('const BUSY_RETRY_MS = 15_000;', 'const BUSY_RETRY_MS = 100;')
+    .replace('const BACKOFF_MS = [60_000, 300_000, 900_000, 3_600_000];', 'const BACKOFF_MS = [50, 50, 50, 50];');
+  if ([testSource, queueSource].some(text => /INTERACTIVE_QUIET_MS = 30_000|JOB_GAP_MS = 5_000|BUSY_RETRY_MS = 15_000|BACKOFF_MS = \[60_000/.test(text))) {
+    throw new Error('A patched constant no longer matches the source');
+  }
   const fixture = `
-import worker, { Coordinator as BaseCoordinator, SharedBrief as BaseSharedBrief } from 'production-worker';
+import worker, { Coordinator as BaseCoordinator, SharedBrief as BaseSharedBrief, QueueRunner as BaseQueueRunner } from 'production-worker';
 const counts = { model: 0, commands: 0, mediaStarts: 0, limits: {} };
 const held = new Set();
 const pending = new Map();
@@ -83,6 +92,7 @@ export class Coordinator extends BaseCoordinator {
     if (action === 'expire-cache') this.ctx.storage.sql.exec('UPDATE completed_summaries SET expires_at = 0');
     if (action === 'cleanup') await super.alarm();
     if (action === 'lease') this.ctx.storage.sql.exec('INSERT OR REPLACE INTO coordinator_state(id,active_until) VALUES (1,?)',Date.now()+60000);
+    if (action === 'fill-window') for (let i = 0; i < 3; i++) this.ctx.storage.sql.exec('INSERT INTO admissions(admitted_at) VALUES (?)', Date.now());
     return {cached:this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM completed_summaries').one().n,cacheExpiry:this.ctx.storage.sql.exec('SELECT MIN(expires_at) AS n FROM completed_summaries').one().n};
   }
 }
@@ -92,6 +102,9 @@ export class SharedBrief extends BaseSharedBrief {
     if (action === 'cleanup') await super.alarm();
     return (await this.ctx.storage.get('brief')) ?? null;
   }
+}
+export class QueueRunner extends BaseQueueRunner {
+  async control() { return this.ctx.storage.getAlarm(); }
 }
 export default { async fetch(request, env, ctx) {
   const url = new URL(request.url);
@@ -114,6 +127,7 @@ export default { async fetch(request, env, ctx) {
     if (action === 'release-startup') {delayedCommands.get(id)?.();delayedCommands.delete(id);}
     if (action === 'release') {held.delete(id);pending.get(id)?.();pending.delete(id);}
     if (action === 'clear-edge') await caches.default.delete(new Request('https://summary-cache.internal/v4/'+id));
+    if (action === 'runner:alarm') return Response.json({alarm: await env.QUEUE_RUNNER.getByName('global').control()});
     if (action.startsWith('share:')) return Response.json(await env.SHARED_BRIEFS.getByName(id).control(action.slice(6)));
     const storage=await env.COORDINATOR.getByName(scope).control(action);
     return Response.json({...counts,pending:[...pending.keys()],...storage});
@@ -139,6 +153,7 @@ export default { async fetch(request, env, ctx) {
     builder.onResolve({ filter: /^production-worker$/ }, () => ({ path: 'production', namespace: 'fixture' }));
     // The patched index.ts imports sibling modules (./auth, ./http, ...) from src/.
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: testSource, loader: 'ts', resolveDir: `${root}src` }));
+    builder.onLoad({ filter: /src[\\/]queue\.ts$/ }, () => ({ contents: queueSource, loader: 'ts', resolveDir: `${root}src` }));
     builder.onResolve({ filter: /^@cloudflare\/sandbox$/ }, () => ({ path: 'sandbox', namespace: 'mock' }));
     builder.onResolve({ filter: /youtube-browser$/ }, () => ({ path: 'browser', namespace: 'mock' }));
     builder.onLoad({ filter: /.*/, namespace: 'mock' }, (args) => ({ loader: 'js', contents: args.path === 'browser'
@@ -151,10 +166,11 @@ export default { async fetch(request, env, ctx) {
   const options = { port: 0, workers: [{ config: {
     name: 'test-ytdw', type: 'worker', compatibilityDate: '2026-08-27', compatibilityFlags: ['nodejs_compat'],
     manifest: { mainModule: 'index.js', modulesRoot: root, modules: { 'index.js': { type: 'esm', contents: bundled.outputFiles[0].text } } },
-    exports: { Coordinator: { type: 'durable-object', storage: 'sqlite' }, SharedBrief: { type: 'durable-object', storage: 'sqlite' } },
+    exports: { Coordinator: { type: 'durable-object', storage: 'sqlite' }, SharedBrief: { type: 'durable-object', storage: 'sqlite' }, QueueRunner: { type: 'durable-object', storage: 'sqlite' } },
     env: {
       COORDINATOR: { type: 'durable-object', worker: 'test-ytdw', exportName: 'Coordinator' },
       SHARED_BRIEFS: { type: 'durable-object', worker: 'test-ytdw', exportName: 'SharedBrief' },
+      QUEUE_RUNNER: { type: 'durable-object', worker: 'test-ytdw', exportName: 'QueueRunner' },
       DB: { type: 'd1', id: 'ytdw-test' },
       ASSETS: { type: 'assets' }, TURNSTILE_SITEKEY: { type: 'text', value: 'fixture-sitekey' },
       TURNSTILE_SECRET: { type: 'text', value: 'fixture-secret' }, TURNSTILE_HOSTNAMES: { type: 'text', value: 'localhost' },

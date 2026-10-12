@@ -4,17 +4,14 @@ import { handleAccount, isAccountPath } from "./account";
 import { handleAuth } from "./auth";
 import { BadRequestError, SHARE_ID, readJsonObject, verifyTurnstile } from "./http";
 import { handleLibrary } from "./library";
+import { handleQueue } from "./queue";
 import { createShare } from "./share";
+import { normalizeYouTubeUrl } from "./video-url";
 import { fetchPlayerResponse, type BrowserPlayerResponse } from "./youtube-browser";
 
 export { Sandbox } from "@cloudflare/sandbox";
+export { QueueRunner } from "./queue";
 
-const YOUTUBE_HOSTS = new Set([
-  "youtube.com",
-  "www.youtube.com",
-  "m.youtube.com",
-  "youtu.be",
-]);
 const MODEL = "@cf/zai-org/glm-5.3-flash";
 const COMMAND_TIMEOUT = 120_000;
 const BROWSER_TIMEOUT_MS = 30_000;
@@ -32,6 +29,11 @@ const MAX_QUEUE_WAIT_MS = 90_000;
 const MAX_PENDING_JOBS = 3; // One running video and at most two waiting videos.
 const GLOBAL_WINDOW_MS = 10_000;
 const GLOBAL_NEW_JOBS_PER_WINDOW = 5;
+// Background queue work (src/queue.ts) only takes spare capacity: it starts only
+// when the Coordinator is idle, no website job was admitted recently, and it
+// leaves this many places in the admission window free for visitors.
+const INTERACTIVE_QUIET_MS = 30_000;
+const BACKGROUND_RESERVED_ADMISSIONS = 2;
 const RECOVERY_GRACE_MS = 10_000;
 const CANONICAL_HOST = "ytdw.fyi";
 const ALIAS_HOSTS = new Set(["www.ytdw.fyi", "ytdw.simons.workers.dev"]);
@@ -88,14 +90,16 @@ interface CompletedSummary {
   expiresAt: number;
 }
 
-interface SummaryFailure {
+export interface SummaryFailure {
   ok: false;
   status: number;
   error: string;
   retryAfter?: number;
+  // The Coordinator had no capacity; no processing was attempted.
+  busy?: true;
 }
 
-type SummaryOutcome = ({ ok: true } & CompletedSummary) | SummaryFailure;
+export type SummaryOutcome = ({ ok: true } & CompletedSummary) | SummaryFailure;
 
 function processingFailure(error: unknown): SummaryFailure {
   const message = error instanceof Error ? error.message : "Unknown error";
@@ -189,38 +193,6 @@ async function handleSharedBrief(request: Request, id: string, env: Env): Promis
   } catch {
     return Response.json({ error: "The shared brief could not be loaded. Please try again." }, { status: 503, headers: SHARE_HEADERS });
   }
-}
-
-function normalizeYouTubeUrl(value: unknown): string {
-  if (typeof value !== "string" || !value) {
-    throw new BadRequestError("Enter a YouTube video URL");
-  }
-
-  let videoUrl: URL;
-  try {
-    videoUrl = new URL(value);
-  } catch {
-    throw new BadRequestError("Enter a valid YouTube video URL");
-  }
-  if (videoUrl.protocol !== "https:" || !YOUTUBE_HOSTS.has(videoUrl.hostname)) {
-    throw new BadRequestError("Only HTTPS YouTube video URLs are accepted");
-  }
-
-  let videoId: string | null = null;
-  if (videoUrl.hostname === "youtu.be") {
-    videoId = videoUrl.pathname.split("/").filter(Boolean)[0] ?? null;
-  } else if (videoUrl.pathname === "/watch") {
-    videoId = videoUrl.searchParams.get("v");
-  } else {
-    const match = videoUrl.pathname.match(/^\/(?:embed|shorts)\/([^/]+)$/);
-    videoId = match?.[1] ?? null;
-  }
-
-  if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
-    throw new BadRequestError("Enter a valid YouTube video URL");
-  }
-
-  return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
 function decodeUrlCommand(encodedUrl: string): string {
@@ -647,6 +619,8 @@ export class Coordinator extends DurableObject<Env> {
   private active = false;
   private inFlight = new Map<string, Promise<SummaryOutcome>>();
   private recoveryUntil: number;
+  // In memory only: after a restart, background work may start one quiet period early.
+  private lastInteractiveAdmission = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -680,6 +654,17 @@ export class Coordinator extends DurableObject<Env> {
   }
 
   async summarize(inputUrl: string): Promise<SummaryOutcome> {
+    return this.admit(inputUrl, false);
+  }
+
+  // The background queue's entry point: same cache, coalescing, limits, and
+  // deadlines, but new work is refused (busy) unless the website has no use for
+  // the capacity. A refused call neither waits nor counts as an admission.
+  async summarizeBackground(inputUrl: string): Promise<SummaryOutcome> {
+    return this.admit(inputUrl, true);
+  }
+
+  private async admit(inputUrl: string, background: boolean): Promise<SummaryOutcome> {
     let videoUrl: string;
     try { videoUrl = normalizeYouTubeUrl(inputUrl); }
     catch (error) { return processingFailure(error); }
@@ -693,13 +678,19 @@ export class Coordinator extends DurableObject<Env> {
     if (existing) return existing;
     if (this.recoveryUntil > now) return this.busy("The video processor is restarting. Please try again in a few minutes.");
     if (this.queue.length + Number(this.active) >= MAX_PENDING_JOBS) return this.busy("The processing queue is full. Please wait a minute and try again.");
+    if (background && (this.active || this.queue.length > 0 || now - this.lastInteractiveAdmission < INTERACTIVE_QUIET_MS)) {
+      return this.busy("The processor is serving the website.");
+    }
 
     // Synchronous SQLite reads/writes cannot interleave: this is an authoritative
     // global sliding window, unlike the additional location-local edge limit.
     this.ctx.storage.sql.exec("DELETE FROM admissions WHERE admitted_at <= ?", now - GLOBAL_WINDOW_MS);
     const count = this.ctx.storage.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM admissions").one().count;
-    if (count >= GLOBAL_NEW_JOBS_PER_WINDOW) return this.busy("Too many new videos. Please wait a minute and try again.");
+    if (count >= GLOBAL_NEW_JOBS_PER_WINDOW - (background ? BACKGROUND_RESERVED_ADMISSIONS : 0)) {
+      return this.busy("Too many new videos. Please wait a minute and try again.");
+    }
     this.ctx.storage.sql.exec("INSERT INTO admissions(admitted_at) VALUES (?)", now);
+    if (!background) this.lastInteractiveAdmission = now;
 
     let resolve!: QueuedSummary["resolve"];
     const outcome = new Promise<SummaryOutcome>((done) => { resolve = done; });
@@ -714,7 +705,7 @@ export class Coordinator extends DurableObject<Env> {
   }
 
   private busy(error: string): SummaryFailure {
-    return { ok: false, status: 503, error, retryAfter: 60 };
+    return { ok: false, status: 503, error, retryAfter: 60, busy: true };
   }
 
   private expireWaiting(job: QueuedSummary): void {
@@ -762,7 +753,8 @@ export class Coordinator extends DurableObject<Env> {
           if (error instanceof UncertainExecutionError) {
             this.recoveryUntil = Math.max(this.recoveryUntil, error.recoverUntil);
             const failure = processingFailure(error);
-            outcome = failure.status === 504 ? failure : this.busy("The video processor lost its connection and is recovering. Please try again in a few minutes.");
+            // Not marked busy: processing was attempted, so the queue counts it as an attempt.
+            outcome = failure.status === 504 ? failure : { ok: false, status: 503, error: "The video processor lost its connection and is recovering. Please try again in a few minutes.", retryAfter: 60 };
           } else outcome = processingFailure(error);
         } finally {
           try { this.ctx.storage.sql.exec("UPDATE coordinator_state SET active_until = ? WHERE id = 1", this.recoveryUntil); }
@@ -821,6 +813,7 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       if (isAccountPath(requestUrl.pathname)) return await handleAccount(request, env, ctx);
       if (requestUrl.pathname.startsWith("/api/auth/")) return await handleAuth(request, env, ctx);
       if (requestUrl.pathname === "/api/library" || requestUrl.pathname.startsWith("/api/library/")) return await handleLibrary(request, env);
+      if (requestUrl.pathname === "/api/queue" || requestUrl.pathname.startsWith("/api/queue/")) return await handleQueue(request, env);
       if (request.method === "POST" && requestUrl.pathname === "/api/summarize") {
         return await handleSummarize(request, env);
       }

@@ -2,8 +2,8 @@ import { currentUser } from "./auth";
 import { SHARE_ID, apiError, apiJson, guardMutation, guardedRoute, readJsonObject, tooManyRequests } from "./http";
 import { createShare } from "./share";
 
-const MAX_SAVED_BRIEFS = 1_000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const MAX_SAVED_BRIEFS = 1_000;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ITEM_COLUMNS = "id, video_id, title, uploader, duration, saved_at, read_at";
 
 interface ItemRow {

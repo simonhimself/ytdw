@@ -1,4 +1,4 @@
-# Accounts and library (Phase 1)
+# Accounts and library
 
 [← Project README](../README.md)
 
@@ -7,9 +7,9 @@ create an account, save briefs to a personal library, and mark them read.
 
 Phase 1 (this document): email + password accounts, a library with Save,
 read/unread, an Unread/All filter, and delete.
-Phase 2 (later): a background queue — paste URLs, leave, and briefs land in the
-library as unread. It must feed jobs through the existing `Coordinator` (never
-around it) and is capped at **50 videos per user per day**.
+Phase 2 (see "Background summary queue" below): paste several URLs, leave, and
+briefs land in the library as unread. Jobs go through the existing `Coordinator`
+(never around it); verified accounts only, **50 videos per user per day**.
 
 Phase 1b (see "Email, recovery, and account management" below): email
 verification, password reset, change password, delete account.
@@ -43,7 +43,7 @@ Saved briefs are full copies. The summary cache and share snapshots expire after
 - Sessions: 32 random bytes, base64url, in cookie
   `__Host-ytdw_session` (`HttpOnly; Secure; SameSite=Lax; Path=/`, 30 days).
   Only the SHA-256 hash is stored. Expired rows are pruned opportunistically.
-- CSRF: `SameSite=Lax`, plus every mutating `/api/auth/*` and `/api/library*`
+- CSRF: `SameSite=Lax`, plus every mutating `/api/auth/*`, `/api/library*`, and `/api/queue*`
   request must send `content-type: application/json` (DELETE included) and, when
   an `Origin` header is present, it must match the request host.
 - Abuse: signup and login both require a Turnstile token whose action is
@@ -209,3 +209,160 @@ Turnstile-gated routes use action `auth` and run `AUTH_RATE_LIMIT` first.
   password form (current + new), and a Delete account section (danger styling,
   password required, plus a confirmation dialog explaining all saved briefs are
   removed). Signed out → prompt to sign in.
+
+## Background summary queue (Phase 2)
+
+User story: "I want to summarize more videos and read them later." A signed-in,
+verified user pastes several YouTube URLs, leaves, and the briefs appear in their
+library as Unread.
+
+### Decisions
+
+- Verified email required to add to the queue (`users.email_verified_at`).
+  Unverified and signed-in users can still read their queue (`GET`).
+- **50 videos per user per rolling 24 hours**, counting every accepted URL
+  whatever happens to it later (removing or failing does not refund it; Retry
+  costs nothing).
+- **At most 10 URLs per paste.**
+- **No email** when work finishes; the library's Unread count is the signal.
+- Every job goes through the `Coordinator`. Coalescing, the 24-hour result cache,
+  the global admission window, the six-hour and 400,000-character limits, and the
+  single-Sandbox constraint therefore apply unchanged.
+- Durable Object alarms drive the work (not Queues or Cron, which Workers
+  Previews cannot run).
+
+### Fairness to the website
+
+The Coordinator runs one job and holds at most two waiting jobs, and admits at
+most five new jobs per rolling 10 seconds. Only the Coordinator knows its own
+state, so fairness is enforced there by a separate entry point,
+`Coordinator.summarizeBackground(videoUrl)`. `summarize()` (the website path) is
+unchanged. A background call:
+
+- returns a cached result or joins an in-flight job for the same video exactly
+  like `summarize()` (neither starts new work);
+- otherwise is admitted only when the Coordinator is **completely idle** (nothing
+  running, nothing waiting), **no website job was admitted in the last 30
+  seconds**, and admitting it still leaves **at least two of the five admission
+  places free** (fewer than three admissions in the last 10 seconds). Otherwise it returns a `busy`
+  failure immediately, without waiting or counting an admission;
+- once admitted, it is an ordinary job: it counts in the window, takes the
+  processing slot, and has the same deadlines.
+
+So background work never occupies a waiting place, and a website request that
+arrives while a background job runs is first in line behind it, as it would be
+behind another visitor's job today. That one in-flight job is the only wait
+background work can add; the 30-second quiet period and a 5-second gap between
+background jobs leave room for visitors during busy periods.
+
+Background jobs do not consume the per-IP and edge `GLOBAL_RATE_LIMIT`
+buckets: those protect the public `/api/summarize` route (which also requires
+Turnstile), and charging them would take capacity from visitors. The
+Coordinator's authoritative window above, the per-user daily quota, the per-paste
+cap, and `LIBRARY_RATE_LIMIT` bound background work instead.
+
+### Runner: one global Durable Object
+
+`QueueRunner` (binding `QUEUE_RUNNER`, migration tag `v4`), addressed as
+`idFromName("global")`. One runner rather than one per user because the real
+constraint is global (one Sandbox, one processing slot): per-user runners would
+each poll a busy Coordinator, multiplying wasted calls, and nothing would decide
+fairly between users. A single runner processes **one item at a time** (so each
+user also has concurrency 1) and chooses fairly between users.
+
+D1 `queue_items` is the source of truth; the runner keeps no state of its own
+besides its alarm.
+
+- `POST /api/queue` and Retry call `runner.kick()`, which sets an alarm for now
+  unless an earlier one is already set.
+- Each `alarm()`:
+  1. Deletes `done`/`removed` rows older than 24 hours (they no longer count
+     towards the quota).
+  2. Requeues `processing` rows whose `started_at` is older than the lease
+     (processing deadline + 2 minutes), counting an attempt. This recovers from a
+     runner restart mid-job; if the job did finish, the retry hits the
+     Coordinator's cache.
+  3. Picks the next due `queued` item, preferring the user served least recently,
+     then the oldest item; marks it `processing` with `started_at`.
+  4. Calls `summarizeBackground()` and applies the outcome (below).
+  5. Sets the next alarm: 5 seconds after a finished job, at the deferral time
+     after `busy`, or at the earliest `next_attempt_at` when nothing is due. No
+     alarm when the queue is empty.
+
+Outcomes:
+
+| Coordinator result | Queue item |
+| --- | --- |
+| Success | Brief copied into `saved_briefs` (unread) and item `done`, in one D1 batch, only if the item is still `processing` (Remove during processing discards the result). Already saved: `done`. Library full (1,000): `failed`, not retryable. |
+| `busy` (Coordinator not idle, quiet period, window, recovering) | Back to `queued`, `next_attempt_at` = now + 15 s, no attempt counted. |
+| 400 (no English captions, empty captions, longer than six hours) | `failed`, not retryable, with the Coordinator's message. |
+| 503 YouTube refusing captions, 504 timeout | `queued` with backoff 1, 5, 15, 60 minutes; `failed` (retryable) after 5 attempts. |
+| 502 other processing failure | Same backoff; `failed` (retryable) after 3 attempts. |
+
+Over-long transcripts are truncated as on the website, not failed.
+
+### Schema (migration `0003`)
+
+```sql
+queue_items(id TEXT PK /* uuid */, user_id TEXT FK ON DELETE CASCADE, video_id TEXT,
+            status TEXT /* queued | processing | done | failed | removed */,
+            attempts INTEGER, error TEXT NULL, retryable INTEGER,
+            created_at INTEGER, updated_at INTEGER, next_attempt_at INTEGER,
+            started_at INTEGER NULL)
+-- indexes: (user_id, created_at) for quota and listing; (status, next_attempt_at) for the runner;
+-- UNIQUE(user_id, video_id) WHERE status IN ('queued', 'processing', 'failed')
+```
+
+Rows are never deleted by users: Remove sets `removed`, so the rolling quota is a
+`COUNT(*)` over the user's rows from the last 24 hours. Each URL is inserted
+with one `INSERT ... SELECT ... WHERE` that checks, in the same statement, that the
+video is not in the library, not already active in the queue, and that the user
+is under 50 for the window; the statements for one paste run as one D1 batch, so
+concurrent pastes cannot overshoot. The partial unique index backs up the
+duplicate check.
+
+### API
+
+Same conventions as `/api/library`: JSON bodies, `{ error }` errors, session
+required (401), `guardMutation` (JSON content type, matching Origin), per-user
+`LIBRARY_RATE_LIMIT`, `cache-control: no-store`. Every query is scoped to the
+session's user; other users' ids look absent (404).
+
+| Method & path | Body | Success |
+| --- | --- | --- |
+| `GET /api/queue` | — | `200 { items: QueueItem[], quota }`; active and failed items, oldest first |
+| `POST /api/queue` | `{ urls: string[] }` | `200 { results: QueueResult[], items, quota }` |
+| `POST /api/queue/:id/retry` | `{}` | `200 { item }`; only `failed` items with `retryable`, else 409 |
+| `DELETE /api/queue/:id` | — | `204`; `queued`, `processing`, or `failed` items |
+
+```ts
+type QueueItem = { id: string; videoId: string; status: "queued" | "processing" | "failed";
+                   error: string | null; retryable: boolean; attempts: number; createdAt: number };
+type QueueResult = { url: string; videoId: string | null;
+                     status: "queued" | "duplicate" | "alreadyQueued" | "alreadySaved" | "invalid" | "overQuota";
+                     error?: string };
+type Quota = { used: number; limit: 50; remaining: number };
+```
+
+`POST /api/queue` errors: 403 "Verify your email to queue videos." for
+unverified accounts; 400 when `urls` is not an array of 1–10 strings ("Paste
+between 1 and 10 YouTube URLs."). Otherwise every URL gets its own result, in
+input order: `invalid` uses the same URL check as the website (`https`,
+YouTube hosts, an 11-character id), and `duplicate` marks a later line for a
+video already in the same paste. The response is 200 even when nothing was
+queued.
+
+### UI (pending owner confirmation)
+
+- Library page: a "Queue videos" box above the tabs (textarea, one URL per line,
+  up to 10, **Add to queue**), with per-line results after submit. Unverified
+  accounts see it disabled with "Verify your email to queue videos" and the
+  existing Resend action. The home page keeps its single-video flow, plus a
+  "Queue several videos" link to the library when signed in.
+- **In progress** section above the tabs, shown only when there are queued,
+  processing, or failed items: each row shows `youtu.be/<id>` (titles are unknown
+  before processing, and the CSP does not allow YouTube thumbnails), its status,
+  and for failures the reason, **Retry** (retryable only), and **Remove**.
+- Finished briefs appear in Unread; the header badge updates. While any item is
+  queued or processing and the page is visible, the library re-checks
+  `GET /api/queue` every 10 seconds and reloads the list when something finishes.
