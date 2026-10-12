@@ -2,6 +2,15 @@
   const byId = (id) => document.getElementById(id);
   const isSharedView = location.pathname.startsWith("/s/");
   const isLibraryView = location.pathname === "/library";
+  const isVerifyView = location.pathname === "/verify";
+  const isResetView = location.pathname === "/reset-password";
+  const isAccountView = location.pathname === "/account";
+  const isHomeView = !isSharedView && !isLibraryView && !isVerifyView && !isResetView && !isAccountView;
+  // Email links carry a one-time token. Read it, then strip it from the URL before anything
+  // else runs so it can't leak through history, screenshots, or the Referer header.
+  const linkToken = isVerifyView || isResetView ? new URLSearchParams(location.search).get("token") || "" : "";
+  if (isVerifyView || isResetView) history.replaceState({}, "", location.pathname);
+  const invalidLinkMessage = "This link is invalid or has expired.";
   const form = byId("summary-form");
   const input = byId("youtube-url");
   const submitButton = byId("submit-button");
@@ -456,7 +465,8 @@
   let savingInFlight = null;
 
   function parseUser(value) {
-    return value && typeof value.email === "string" && value.email ? { email: value.email } : null;
+    // Only an explicit false counts as unverified, so a response without the field never nags.
+    return value && typeof value.email === "string" && value.email ? { email: value.email, emailVerified: value.emailVerified !== false } : null;
   }
 
   function apiRequest(path, { method = "GET", body, timeout = 15_000 } = {}) {
@@ -504,6 +514,75 @@
     badge.textContent = unread > 99 ? "99+" : String(unread);
     libraryLink.setAttribute("aria-label", user && unread > 0 ? `Library, ${unread} unread` : "Library");
     if (isLibraryView) libraryLink.setAttribute("aria-current", "page");
+    if (isAccountView) byId("account-link").setAttribute("aria-current", "page");
+    renderVerifyBanner();
+  }
+
+  // The banner follows signed-in-but-unverified accounts on the main, library, and account views.
+  // It stays off shared and email-link pages, which have their own context.
+  let resendState = "idle";
+  function renderVerifyBanner() {
+    const show = Boolean(user) && !user.emailVerified && (isHomeView || isLibraryView || isAccountView);
+    if (!show) resendState = "idle";
+    byId("verify-banner").hidden = !show;
+    byId("verify-banner-resend").hidden = resendState === "sent";
+    byId("verify-banner-sent").hidden = resendState !== "sent";
+    if (resendState !== "idle" || !show) byId("verify-banner-note").hidden = true;
+  }
+
+  // Shared by the banner and the /verify page. Resolves to an outcome instead of touching the DOM.
+  async function requestResend() {
+    try {
+      const response = await apiRequest("/api/auth/verify/resend", { method: "POST", body: {} });
+      if (response.status === 401) {
+        endSession();
+        return { outcome: "signed-out" };
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not send the email. Please try again."));
+      // 200 with a user means the address was already verified; 202 means a new email is on its way.
+      if (response.status === 200) {
+        const verified = parseUser((await responseData(response).catch(() => ({}))).user);
+        if (verified) {
+          user = verified;
+          renderAccount();
+          return { outcome: "verified" };
+        }
+      }
+      return { outcome: "sent" };
+    } catch (requestError) {
+      return { outcome: "error", message: requestFailureMessage(requestError, "Could not send the email. Please try again.") };
+    }
+  }
+
+  byId("verify-banner-resend").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (button.getAttribute("aria-disabled") === "true") return;
+    button.setAttribute("aria-disabled", "true");
+    byId("verify-banner-note").hidden = true;
+    const { outcome, message } = await requestResend();
+    button.setAttribute("aria-disabled", "false");
+    if (outcome === "sent") {
+      resendState = "sent";
+      renderVerifyBanner();
+      announceAccount("Verification email sent. Check your inbox.");
+      byId("verify-banner-sent").focus();
+    } else if (outcome === "verified") {
+      announceAccount("Your email is already verified.");
+      accountMenu.querySelector("summary").focus();
+    } else if (outcome === "signed-out") {
+      announceAccount("Your session has ended. Sign in again.");
+      signInButton.focus();
+    } else {
+      byId("verify-banner-note").textContent = message;
+      byId("verify-banner-note").hidden = false;
+      announceAccount(message);
+    }
+  });
+
+  // Pages that depend on the signed-in user re-render whenever it changes.
+  function afterSessionChange() {
+    if (isAccountView) renderAccountPage();
+    if (isVerifyView) renderVerifyPage();
   }
 
   // Header counts come from the unread list endpoint; failures just omit the badge.
@@ -523,6 +602,7 @@
     savedBriefs = new WeakSet();
     renderAccount();
     renderSaveButton();
+    afterSessionChange();
   }
 
   async function loadAccount() {
@@ -530,9 +610,12 @@
       const response = await apiRequest("/api/auth/me", { timeout: 10_000 });
       if (response.ok) user = parseUser((await responseData(response)).user);
     } catch {}
+    // The /verify request can finish before /me; keep the in-memory user in step with it.
+    if (user && verifyState === "success") user.emailVerified = true;
     accountKnown = true;
     renderAccount();
     renderSaveButton();
+    afterSessionChange();
     if (user && !isLibraryView) void refreshCounts();
   }
 
@@ -576,22 +659,41 @@
   let authWidgetId;
   let authWidgetPromise;
 
+  // Modes: "signin", "signup", and "forgot" (email only; always ends in a generic confirmation).
   function setAuthMode(mode) {
     authMode = mode;
     const signup = mode === "signup";
-    byId("auth-title").textContent = signup ? "Create account" : "Sign in";
-    byId("auth-lede").textContent = signup ? "Create an account to save briefs and read them later." : "Sign in to save briefs and read them later.";
-    authSubmit.textContent = signup ? "Create account" : "Sign in";
-    byId("auth-switch-prompt").textContent = signup ? "Already have an account?" : "New here?";
-    byId("auth-switch").textContent = signup ? "Sign in" : "Create an account";
+    const forgot = mode === "forgot";
+    showAuthDone(null);
+    byId("auth-title").textContent = forgot ? "Reset password" : signup ? "Create account" : "Sign in";
+    byId("auth-lede").textContent = forgot ? "Enter your email and we’ll send a link to choose a new password."
+      : signup ? "Create an account to save briefs and read them later." : "Sign in to save briefs and read them later.";
+    authSubmit.textContent = forgot ? "Send reset link" : signup ? "Create account" : "Sign in";
+    byId("auth-switch-prompt").textContent = signup ? "Already have an account?" : forgot ? "Remembered it?" : "New here?";
+    byId("auth-switch").textContent = signup || forgot ? "Sign in" : "Create an account";
+    byId("auth-password-field").hidden = forgot;
     byId("auth-hint").hidden = !signup;
+    byId("auth-forgot-row").hidden = mode !== "signin";
     authPassword.autocomplete = signup ? "new-password" : "current-password";
+  }
+
+  // The confirmation replaces the form once a reset link has been requested.
+  function showAuthDone(message) {
+    const done = message !== null;
+    byId("auth-fields").hidden = done;
+    byId("auth-done").hidden = !done;
+    if (done) {
+      byId("auth-title").textContent = "Check your email";
+      byId("auth-done-message").textContent = message;
+      byId("auth-done-message").focus();
+    }
   }
 
   function showAuthError(message, field) {
     const element = byId("auth-error");
     element.textContent = message;
     element.hidden = !message;
+    byId("auth-error-actions").hidden = true;
     authEmail.removeAttribute("aria-invalid");
     authPassword.removeAttribute("aria-invalid");
     if (message && field) {
@@ -609,7 +711,10 @@
     authPassword.readOnly = busy;
     authSubmit.setAttribute("aria-disabled", String(busy));
     const signup = authMode === "signup";
-    authSubmit.textContent = next === "verifying" ? "Verifying…" : next === "submitting" ? (signup ? "Creating account…" : "Signing in…") : (signup ? "Create account" : "Sign in");
+    const forgot = authMode === "forgot";
+    const idleLabel = forgot ? "Send reset link" : signup ? "Create account" : "Sign in";
+    const busyLabel = forgot ? "Sending…" : signup ? "Creating account…" : "Signing in…";
+    authSubmit.textContent = next === "verifying" ? "Verifying…" : next === "submitting" ? busyLabel : idleLabel;
   }
 
   function resetAuthWidget() {
@@ -653,6 +758,7 @@
     if (authDialog.open) return;
     authOpener = opener;
     afterAuth = then;
+    // setAuthMode also clears any confirmation panel left from a previous forgot request.
     setAuthMode(mode);
     setAuthPhase("idle");
     authPassword.value = "";
@@ -672,16 +778,40 @@
     const opener = authOpener;
     authOpener = null;
     // The opener may have disappeared (for example the header button after signing in).
+    const pageTitle = [byId("library-title"), byId("account-title"), byId("verify-title"), byId("reset-title")].find((element) => element.getClientRects().length);
     const target = opener?.isConnected && opener.getClientRects().length ? opener
-      : isLibraryView && byId("library-title").getClientRects().length ? byId("library-title")
-      : user && accountMenu.getClientRects().length ? accountMenu.querySelector("summary") : null;
+      : pageTitle ?? (user && accountMenu.getClientRects().length ? accountMenu.querySelector("summary") : null);
     target?.focus();
   });
   authDialog.addEventListener("click", (event) => { if (event.target === authDialog) authDialog.close(); });
   byId("auth-close").addEventListener("click", () => authDialog.close());
   byId("auth-switch").addEventListener("click", () => {
     if (authPhase !== "idle") return;
-    setAuthMode(authMode === "signup" ? "signin" : "signup");
+    setAuthMode(authMode === "signin" ? "signup" : "signin");
+    showAuthError("");
+    authEmail.focus();
+  });
+  byId("auth-forgot").addEventListener("click", () => {
+    if (authPhase !== "idle") return;
+    setAuthMode("forgot");
+    showAuthError("");
+    authEmail.focus();
+  });
+  // Inline actions offered after a duplicate-signup error; the typed email is kept.
+  byId("auth-error-signin").addEventListener("click", () => {
+    if (authPhase !== "idle") return;
+    setAuthMode("signin");
+    showAuthError("");
+    authPassword.focus();
+  });
+  byId("auth-error-reset").addEventListener("click", () => {
+    if (authPhase !== "idle") return;
+    setAuthMode("forgot");
+    showAuthError("");
+    authEmail.focus();
+  });
+  byId("auth-done-back").addEventListener("click", () => {
+    setAuthMode("signin");
     showAuthError("");
     authEmail.focus();
   });
@@ -693,10 +823,11 @@
     if (authPhase !== "idle") return;
     const email = authEmail.value.trim();
     const password = authPassword.value;
+    const forgot = authMode === "forgot";
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return showAuthError("Enter a valid email address.", authEmail);
-    if (password.length < 8) return showAuthError(authMode === "signup" ? "Use at least 8 characters for your password." : "Enter your password (at least 8 characters).", authPassword);
-    if (password.length > 256) return showAuthError("Use 256 characters or fewer for your password.", authPassword);
-    authCredentials = { email, password };
+    if (!forgot && password.length < 8) return showAuthError(authMode === "signup" ? "Use at least 8 characters for your password." : "Enter your password (at least 8 characters).", authPassword);
+    if (!forgot && password.length > 256) return showAuthError("Use 256 characters or fewer for your password.", authPassword);
+    authCredentials = forgot ? { email } : { email, password };
     showAuthError("");
     setAuthPhase("verifying");
     authTimer = setTimeout(() => failAuth("Verification timed out. Please try again."), 120_000);
@@ -712,13 +843,30 @@
   async function submitAuth(turnstileToken) {
     setAuthPhase("submitting");
     const signup = authMode === "signup";
+    const forgot = authMode === "forgot";
     try {
-      const response = await apiRequest(signup ? "/api/auth/signup" : "/api/auth/login", {
+      const response = await apiRequest(forgot ? "/api/auth/password/forgot" : signup ? "/api/auth/signup" : "/api/auth/login", {
         method: "POST",
         body: { ...authCredentials, turnstileToken }
       });
       if (authPhase !== "submitting") return;
-      if (!response.ok) throw new Error(await failureMessage(response, "Could not complete that request. Please try again."));
+      if (!response.ok) {
+        const failure = new Error(await failureMessage(response, response.status === 409
+          ? "An account with this email already exists. Sign in or reset your password."
+          : "Could not complete that request. Please try again."));
+        failure.status = response.status;
+        throw failure;
+      }
+      if (forgot) {
+        // The server answers the same way whether or not the address has an account.
+        const message = await responseData(response).then((data) => data.message, () => "");
+        if (authPhase !== "submitting") return;
+        setAuthPhase("idle");
+        resetAuthWidget();
+        showAuthDone(typeof message === "string" && message ? message : "If that address has an account, we’ve sent a link to reset the password.");
+        announceAccount("Check your email for a reset link.");
+        return;
+      }
       const signedIn = parseUser((await responseData(response)).user);
       if (!signedIn) throw new Error("The service returned an incomplete response. Please try again.");
       if (authPhase !== "submitting") return;
@@ -730,11 +878,14 @@
       authDialog.close();
       renderAccount();
       announceAccount(`Signed in as ${user.email}.`);
+      afterSessionChange();
       if (isLibraryView) void routeLibrary(false);
       else void refreshCounts();
       then?.();
     } catch (requestError) {
-      failAuth(requestFailureMessage(requestError, "Could not complete that request. Please try again."), signup ? authEmail : authPassword);
+      failAuth(requestFailureMessage(requestError, "Could not complete that request. Please try again."), signup || forgot ? authEmail : authPassword);
+      // A duplicate signup is recoverable in one click: offer sign in or a password reset.
+      if (signup && requestError.status === 409 && authPhase === "idle") byId("auth-error-actions").hidden = false;
     }
   }
 
@@ -1061,16 +1212,349 @@
     }
   });
 
+  // ---- Email verification page --------------------------------------------------
+
+  let verifyState = "pending"; // pending | success | invalid | error
+  let verifyMessage = "";
+  let verifyNote = "";
+  let verifyResent = false;
+  let verifyRequest = 0;
+
+  function renderVerifyPage(focus = false) {
+    if (!isVerifyView) return;
+    const verifiedAlready = Boolean(user?.emailVerified);
+    let title = "Verifying your email…";
+    let detail = "One moment while we confirm your address.";
+    if (verifyState === "success") {
+      title = "Email verified";
+      detail = verifyMessage || "Thanks. Your account can now be recovered if you ever forget your password.";
+    } else if (verifyState === "invalid") {
+      title = "This link didn’t work";
+      detail = verifyMessage || invalidLinkMessage;
+      if (verifyResent) detail = "Sent — check your inbox. The new link will replace this one.";
+      else if (verifiedAlready) detail += " Your email is already verified.";
+      else detail += user ? " We can send you a new one." : " Sign in to request a new one.";
+    } else if (verifyState === "error") {
+      title = "Could not verify your email";
+      detail = verifyMessage;
+    }
+    if (verifyNote) detail += ` ${verifyNote}`;
+    byId("verify-title").textContent = title;
+    byId("verify-detail").textContent = detail;
+    const invalid = verifyState === "invalid";
+    byId("verify-continue").hidden = verifyState !== "success" && !(invalid && verifiedAlready);
+    byId("verify-resend").hidden = !invalid || !user || verifiedAlready || verifyResent;
+    byId("verify-sign-in").hidden = !invalid || Boolean(user) || !accountKnown;
+    byId("verify-retry").hidden = verifyState !== "error";
+    document.title = "Verify email | YT;DW";
+    if (focus && !authDialog.open) byId("verify-title").focus();
+  }
+
+  async function runVerify() {
+    const request = ++verifyRequest;
+    verifyState = "pending";
+    verifyNote = "";
+    renderVerifyPage();
+    if (!linkToken) {
+      verifyState = "invalid";
+      verifyMessage = invalidLinkMessage;
+      renderVerifyPage(true);
+      return;
+    }
+    try {
+      const response = await apiRequest("/api/auth/verify", { method: "POST", body: { token: linkToken } });
+      if (request !== verifyRequest) return;
+      if (response.status === 400) {
+        verifyState = "invalid";
+        verifyMessage = await failureMessage(response, invalidLinkMessage);
+      } else if (!response.ok) {
+        throw new Error(await failureMessage(response, "Please try again."));
+      } else {
+        const verified = parseUser((await responseData(response).catch(() => ({}))).user);
+        if (user && verified) user = verified;
+        if (user) user.emailVerified = true;
+        verifyState = "success";
+        verifyMessage = "";
+        renderAccount();
+      }
+    } catch (requestError) {
+      if (request !== verifyRequest) return;
+      verifyState = "error";
+      verifyMessage = requestFailureMessage(requestError, "Please try again.");
+    }
+    renderVerifyPage(true);
+    announceAccount(verifyState === "success" ? "Email verified." : verifyState === "invalid" ? "This verification link is invalid or has expired." : "Could not verify your email.");
+  }
+
+  byId("verify-retry").addEventListener("click", () => void runVerify());
+  byId("verify-sign-in").addEventListener("click", (event) => openAuth({ opener: event.currentTarget }));
+  byId("verify-resend").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (button.getAttribute("aria-disabled") === "true") return;
+    button.setAttribute("aria-disabled", "true");
+    verifyNote = "";
+    const { outcome, message } = await requestResend();
+    button.setAttribute("aria-disabled", "false");
+    if (outcome === "sent") {
+      verifyResent = true;
+      announceAccount("Verification email sent. Check your inbox.");
+    } else if (outcome === "verified") {
+      verifyState = "success";
+      verifyMessage = "Your email is already verified.";
+      announceAccount("Your email is already verified.");
+    } else if (outcome === "signed-out") {
+      announceAccount("Your session has ended. Sign in again.");
+    } else {
+      verifyNote = message;
+      announceAccount(message);
+    }
+    renderVerifyPage(true);
+  });
+
+  // ---- Password reset page ------------------------------------------------------
+
+  const resetForm = byId("reset-form");
+  const resetField = byId("reset-password");
+  const resetSubmit = byId("reset-submit");
+  let resetBusy = false;
+
+  // Page forms share one error pattern: a role=alert message plus aria-invalid on the culprit.
+  function showFormMessage(id, text, field) {
+    const element = byId(id);
+    element.textContent = text;
+    element.hidden = !text;
+    element.closest("form")?.querySelectorAll("input").forEach((input) => input.removeAttribute("aria-invalid"));
+    if (text && field) {
+      field.setAttribute("aria-invalid", "true");
+      field.focus();
+    }
+  }
+
+  function showResetInvalid(message) {
+    resetForm.hidden = true;
+    byId("reset-invalid").hidden = false;
+    byId("reset-title").textContent = "This link didn’t work";
+    byId("reset-invalid-detail").textContent = `${message} Request a new link to choose a new password.`;
+    document.title = "Reset password | YT;DW";
+    byId("reset-title").focus();
+  }
+
+  function startResetPage() {
+    byId("reset-page").hidden = false;
+    document.title = "Reset password | YT;DW";
+    if (!linkToken) showResetInvalid(invalidLinkMessage);
+    else resetField.focus();
+  }
+
+  resetForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (resetBusy) return;
+    const password = resetField.value;
+    if (password.length < 8) return showFormMessage("reset-error", "Use at least 8 characters for your password.", resetField);
+    if (password.length > 256) return showFormMessage("reset-error", "Use 256 characters or fewer for your password.", resetField);
+    showFormMessage("reset-error", "");
+    resetBusy = true;
+    resetField.readOnly = true;
+    resetSubmit.setAttribute("aria-disabled", "true");
+    resetSubmit.textContent = "Resetting…";
+    let navigating = false;
+    try {
+      const response = await apiRequest("/api/auth/password/reset", { method: "POST", body: { token: linkToken, password } });
+      if (response.status === 400) {
+        const message = await failureMessage(response, invalidLinkMessage);
+        // Only a rejected link retires the form; a rejected password can be corrected in place.
+        if (/link|expired/i.test(message)) return showResetInvalid(message);
+        throw new Error(message);
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not reset your password. Please try again."));
+      const signedIn = parseUser((await responseData(response)).user);
+      if (!signedIn) throw new Error("The service returned an incomplete response. Please try again.");
+      user = signedIn;
+      renderAccount();
+      announceAccount("Password updated. Signing you in.");
+      // A full navigation re-reads the new session and renders the library from scratch.
+      navigating = true;
+      location.replace("/library");
+    } catch (requestError) {
+      showFormMessage("reset-error", requestFailureMessage(requestError, "Could not reset your password. Please try again."), resetField);
+    } finally {
+      if (!navigating) {
+        resetBusy = false;
+        resetField.readOnly = false;
+        resetSubmit.setAttribute("aria-disabled", "false");
+        resetSubmit.textContent = "Reset password";
+      }
+    }
+  });
+  byId("reset-request").addEventListener("click", (event) => openAuth({ mode: "forgot", opener: event.currentTarget }));
+
+  // ---- Account page -------------------------------------------------------------
+
+  const passwordForm = byId("password-form");
+  const deleteForm = byId("delete-form");
+  const deleteDialog = byId("delete-account-dialog");
+  let passwordBusy = false;
+  let deleteBusy = false;
+  let deleteFocus = null;
+
+  function renderAccountPage(focus = false) {
+    if (!isAccountView) return;
+    byId("account-signed-out").hidden = Boolean(user) || !accountKnown;
+    byId("account-settings").hidden = !user;
+    document.title = "Account | YT;DW";
+    if (user) {
+      byId("account-page-email").textContent = user.email;
+      byId("account-page-status").textContent = user.emailVerified ? "Verified" : "Not verified";
+    } else {
+      // Nothing typed here should survive signing out.
+      passwordForm.reset();
+      deleteForm.reset();
+      for (const id of ["password-error", "password-success", "delete-error"]) showFormMessage(id, "");
+    }
+    if (focus && !authDialog.open) byId("account-title").focus();
+  }
+
+  function startAccountPage() {
+    byId("account-page").hidden = false;
+    renderAccountPage();
+  }
+
+  byId("account-sign-in").addEventListener("click", (event) => openAuth({ opener: event.currentTarget }));
+
+  passwordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (passwordBusy) return;
+    const currentField = byId("current-password");
+    const newField = byId("new-password");
+    const currentPassword = currentField.value;
+    const newPassword = newField.value;
+    byId("password-success").hidden = true;
+    if (!currentPassword) return showFormMessage("password-error", "Enter your current password.", currentField);
+    if (newPassword.length < 8) return showFormMessage("password-error", "Use at least 8 characters for your new password.", newField);
+    if (newPassword.length > 256) return showFormMessage("password-error", "Use 256 characters or fewer for your new password.", newField);
+    showFormMessage("password-error", "");
+    passwordBusy = true;
+    const submit = byId("password-submit");
+    submit.setAttribute("aria-disabled", "true");
+    submit.textContent = "Changing…";
+    try {
+      const response = await apiRequest("/api/auth/password/change", { method: "POST", body: { currentPassword, newPassword } });
+      if (response.status === 401) {
+        endSession();
+        announceAccount("Your session has ended. Sign in again.");
+        return;
+      }
+      if (response.status === 403) {
+        showFormMessage("password-error", await failureMessage(response, "Current password is incorrect."), currentField);
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not change your password. Please try again."));
+      const updated = parseUser((await responseData(response).catch(() => ({}))).user);
+      if (updated) user = updated;
+      passwordForm.reset();
+      byId("password-success").textContent = "Password changed.";
+      byId("password-success").hidden = false;
+      announceAccount("Password changed.");
+    } catch (requestError) {
+      showFormMessage("password-error", requestFailureMessage(requestError, "Could not change your password. Please try again."));
+    } finally {
+      passwordBusy = false;
+      submit.setAttribute("aria-disabled", "false");
+      submit.textContent = "Change password";
+    }
+  });
+
+  deleteForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (deleteBusy) return;
+    const field = byId("delete-password");
+    if (!field.value) return showFormMessage("delete-error", "Enter your password to delete your account.", field);
+    showFormMessage("delete-error", "");
+    deleteDialog.showModal();
+    byId("delete-account-cancel").focus();
+  });
+  byId("delete-account-cancel").addEventListener("click", () => { if (!deleteBusy) deleteDialog.close(); });
+  deleteDialog.addEventListener("click", (event) => { if (event.target === deleteDialog && !deleteBusy) deleteDialog.close(); });
+  // Escape must not dismiss the dialog while the deletion request is in flight.
+  deleteDialog.addEventListener("cancel", (event) => { if (deleteBusy) event.preventDefault(); });
+  deleteDialog.addEventListener("close", () => {
+    const target = deleteFocus ?? byId("delete-submit");
+    deleteFocus = null;
+    if (user) target.focus();
+  });
+  byId("delete-account-confirm").addEventListener("click", async (event) => {
+    if (deleteBusy) return;
+    const confirm = event.currentTarget;
+    const cancel = byId("delete-account-cancel");
+    const field = byId("delete-password");
+    deleteBusy = true;
+    confirm.setAttribute("aria-disabled", "true");
+    cancel.setAttribute("aria-disabled", "true");
+    confirm.textContent = "Deleting…";
+    let navigating = false;
+    try {
+      const response = await apiRequest("/api/account/delete", { method: "POST", body: { password: field.value } });
+      if (response.status === 401) {
+        deleteDialog.close();
+        endSession();
+        announceAccount("Your session has ended. Sign in again.");
+        return;
+      }
+      if (response.status === 403) {
+        deleteFocus = field;
+        deleteDialog.close();
+        showFormMessage("delete-error", await failureMessage(response, "Password is incorrect."), field);
+        return;
+      }
+      if (!response.ok) throw new Error(await failureMessage(response, "Could not delete your account. Please try again."));
+      announceAccount("Account deleted.");
+      // The session is gone server-side; a full navigation drops all signed-in state.
+      navigating = true;
+      location.replace("/");
+    } catch (requestError) {
+      deleteDialog.close();
+      showFormMessage("delete-error", requestFailureMessage(requestError, "Could not delete your account. Please try again."));
+    } finally {
+      if (!navigating) {
+        deleteBusy = false;
+        confirm.setAttribute("aria-disabled", "false");
+        cancel.setAttribute("aria-disabled", "false");
+        confirm.textContent = "Delete account";
+      }
+    }
+  });
+
+  // ---- Init ---------------------------------------------------------------------
+
+  // The duplicate-signup notice email links to /?auth=forgot. Consume the param right away so a
+  // reload doesn't reopen the dialog; other params (such as ?url=) are left alone.
+  const startParams = new URLSearchParams(location.search);
+  const wantsForgot = startParams.get("auth") === "forgot";
+  if (startParams.has("auth")) {
+    startParams.delete("auth");
+    const rest = startParams.toString();
+    history.replaceState({}, "", `${location.pathname}${rest ? `?${rest}` : ""}${location.hash}`);
+  }
+
+  const accountLoaded = loadAccount();
+  void accountLoaded.then(() => {
+    if (wantsForgot && !user) openAuth({ mode: "forgot", opener: signInButton });
+  });
   if (isLibraryView) {
     libraryLink.dataset.libraryNav = "";
-    void loadAccount().then(() => routeLibrary(false));
+    void accountLoaded.then(() => routeLibrary(false));
+  } else if (isSharedView) {
+    void loadSharedBrief();
+  } else if (isVerifyView) {
+    byId("verify-page").hidden = false;
+    void runVerify();
+  } else if (isResetView) {
+    startResetPage();
+  } else if (isAccountView) {
+    startAccountPage();
   } else {
-    void loadAccount();
-    if (isSharedView) void loadSharedBrief();
-    else {
-      input.value = new URLSearchParams(location.search).get("url") || "";
-      setSubmitState();
-      void setupVerification();
-    }
+    input.value = new URLSearchParams(location.search).get("url") || "";
+    setSubmitState();
+    void setupVerification();
   }
 })();

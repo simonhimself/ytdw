@@ -292,12 +292,12 @@ test('signup sets a hardened session cookie that /me and logout honor', async ()
   const response = await call('/api/auth/signup', { method: 'POST', body: credentials('  Reader@Example.COM ') });
   assert.equal(response.status, 201);
   assert.equal(response.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await response.json(), { user: { email: 'reader@example.com' } });
+  assert.deepEqual(await response.json(), { user: { email: 'reader@example.com', emailVerified: false } });
   const setCookie = response.headers.get('set-cookie');
   assert.match(setCookie, /^__Host-ytdw_session=[A-Za-z0-9_-]{43}; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/);
   const cookie = cookieOf(response);
   const me = await call('/api/auth/me', { cookie });
-  assert.deepEqual(await me.json(), { user: { email: 'reader@example.com' } });
+  assert.deepEqual(await me.json(), { user: { email: 'reader@example.com', emailVerified: false } });
   assert.equal(me.headers.get('cache-control'), 'no-store');
   assert.deepEqual(await (await call('/api/auth/me', { cookie: '__Host-ytdw_session=forged' })).json(), { user: null });
 
@@ -323,6 +323,7 @@ test('duplicate signup conflicts and login failures share one generic error', as
   await signUp('dup@example.com');
   const dup = await call('/api/auth/signup', { method: 'POST', body: credentials('DUP@example.com') });
   assert.equal(dup.status, 409);
+  assert.equal((await dup.json()).error, 'An account with this email already exists. Sign in or reset your password.');
   const good = await call('/api/auth/login', { method: 'POST', body: credentials('Dup@Example.com') });
   assert.equal(good.status, 200);
   assert.ok(cookieOf(good));
@@ -521,4 +522,386 @@ test('alias hosts redirect to the canonical host, keeping path and query', async
     assert.equal(api.status, 308);
   }
   assert.equal((await h.request('/library')).status, 200);
+});
+
+// --- Email, recovery, and account management (Phase 1b) -------------------
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const emailsTo = async address => (await h.emails()).filter(message => message.to === address);
+// Email is sent after the response, so tests wait for the Nth message to an address.
+async function emailTo(address, n = 1) {
+  await waitFor(async () => (await emailsTo(address)).length >= n);
+  return (await emailsTo(address))[n - 1];
+}
+// Negative assertions have no completion signal; give background work time to run.
+const settle = () => sleep(300);
+const tokenOf = message => message.text.match(/token=([A-Za-z0-9_-]{43})/)[1];
+const postJson = (path, body, cookie, headers) => call(path, { method: 'POST', body, cookie, headers });
+const forgot = (email, turnstileToken = 'fixture-auth-token') => postJson('/api/auth/password/forgot', { email, turnstileToken });
+const emailDb = () => h.mf.getD1Database('DB', 'test-ytdw');
+const FORGOT_MESSAGE = "If that address has an account, we've sent a link to reset the password.";
+const INVALID_LINK = 'This link is invalid or has expired.';
+const meOf = async cookie => (await (await call('/api/auth/me', { cookie })).json()).user;
+
+test('signup emails a verification link; the token verifies once and is stored hashed', async () => {
+  const email = 'verify@example.com';
+  const cookie = await signUp(email);
+  const message = await emailTo(email);
+  assert.deepEqual(message.from, { email: 'noreply@ytdw.fyi', name: 'YT;DW' });
+  assert.equal(message.subject, 'Verify your email for YT;DW');
+  const token = tokenOf(message);
+  assert.ok(message.text.includes(`https://ytdw.fyi/verify?token=${token}`));
+  assert.ok(message.html.includes(`href="https://ytdw.fyi/verify?token=${token}"`));
+  assert.deepEqual(await meOf(cookie), { email, emailVerified: false });
+
+  const db = await emailDb();
+  const rows = (await db.prepare('SELECT t.* FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ?').bind(email).all()).results;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].purpose, 'verify');
+  assert.notEqual(rows[0].token_hash, token);
+  assert.match(rows[0].token_hash, /^[0-9a-f]{64}$/);
+  assert.equal(rows[0].expires_at - rows[0].created_at, 24 * 60 * 60 * 1000);
+
+  // Works without a session, so the link can be opened on another device.
+  const verified = await postJson('/api/auth/verify', { token });
+  assert.equal(verified.status, 200);
+  assert.equal(verified.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await verified.json(), { user: { email, emailVerified: true } });
+  assert.deepEqual(await meOf(cookie), { email, emailVerified: true });
+  const login = await postJson('/api/auth/login', credentials(email));
+  assert.deepEqual((await login.json()).user, { email, emailVerified: true });
+
+  const reuse = await postJson('/api/auth/verify', { token });
+  assert.equal(reuse.status, 400);
+  assert.equal((await reuse.json()).error, INVALID_LINK);
+  for (const bad of [{}, { token: 5 }, { token: 'short' }, { token: 'x'.repeat(43) }, { token: null }]) {
+    assert.equal((await postJson('/api/auth/verify', bad)).status, 400, JSON.stringify(bad));
+  }
+});
+
+test('expired verification links are rejected; a newer link replaces the older one', async () => {
+  const email = 'expired-verify@example.com';
+  const cookie = await signUp(email);
+  const first = tokenOf(await emailTo(email, 1));
+  assert.equal((await postJson('/api/auth/verify/resend', {}, cookie)).status, 202);
+  const second = tokenOf(await emailTo(email, 2));
+  assert.notEqual(first, second);
+  assert.equal((await postJson('/api/auth/verify', { token: first })).status, 400, 'replaced by the newer token');
+
+  const db = await emailDb();
+  await db.prepare('UPDATE auth_tokens SET expires_at = ? WHERE purpose = ? AND user_id = (SELECT id FROM users WHERE email = ?)').bind(Date.now() - 1, 'verify', email).run();
+  assert.equal((await postJson('/api/auth/verify', { token: second })).status, 400);
+  assert.deepEqual(await meOf(cookie), { email, emailVerified: false });
+});
+
+test('resend requires a session, is a no-op once verified, and never exceeds the throttle in its response', async () => {
+  const email = 'resend@example.com';
+  assert.equal((await postJson('/api/auth/verify/resend', {})).status, 401);
+  const cookie = await signUp(email);
+  await emailTo(email, 1);
+  const resent = await postJson('/api/auth/verify/resend', {}, cookie);
+  assert.equal(resent.status, 202);
+  assert.deepEqual(await resent.json(), {});
+  const token = tokenOf(await emailTo(email, 2));
+  assert.equal((await postJson('/api/auth/verify', { token })).status, 200);
+
+  const already = await postJson('/api/auth/verify/resend', {}, cookie);
+  assert.equal(already.status, 200);
+  assert.deepEqual(await already.json(), { user: { email, emailVerified: true } });
+  await settle();
+  assert.equal((await emailsTo(email)).length, 2, 'verified accounts get no further verification email');
+});
+
+test('duplicate signup returns 409 and emails the owner a tokenless notice that cannot invalidate a pending reset link', async () => {
+  const email = 'owner@example.com';
+  await signUp(email);
+  await emailTo(email, 1);
+  assert.equal((await forgot(email)).status, 202);
+  const resetToken = tokenOf(await emailTo(email, 2));
+  const db = await emailDb();
+  const tokenRows = () => db.prepare('SELECT t.token_hash, t.purpose FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? ORDER BY t.purpose').bind(email).all().then(r => r.results);
+  const before = await tokenRows();
+
+  const dup = await postJson('/api/auth/signup', credentials(email, 'another password'));
+  assert.equal(dup.status, 409);
+  assert.equal(dup.headers.get('set-cookie'), null);
+  const notice = await emailTo(email, 3);
+  assert.equal(notice.subject, 'Someone tried to create a YT;DW account with your address');
+  assert.ok(notice.text.includes('https://ytdw.fyi/?auth=forgot'));
+  assert.ok(notice.html.includes('href="https://ytdw.fyi/?auth=forgot"'));
+  assert.ok(!/token=/.test(notice.text + notice.html), 'the notice carries no token');
+
+  // No auth_tokens row was created or replaced, so the earlier reset link still works.
+  assert.deepEqual(await tokenRows(), before);
+  const reset = await postJson('/api/auth/password/reset', { token: resetToken, password: 'brand new password' });
+  assert.equal(reset.status, 200);
+  assert.equal((await postJson('/api/auth/login', credentials(email, 'brand new password'))).status, 200);
+});
+
+test('duplicate notices share the per-address email throttle', async () => {
+  const email = 'noticed@example.com';
+  await signUp(email); // verification email = 1 of 3
+  for (let i = 0; i < 4; i++) assert.equal((await postJson('/api/auth/signup', credentials(email))).status, 409);
+  await emailTo(email, 3);
+  await settle();
+  assert.equal((await emailsTo(email)).length, 3);
+});
+
+test('an invalid APP_ORIGIN sends nothing and creates no tokens; the request Host is never used', async () => {
+  for (const bad of ['http://ytdw.fyi', 'not a url', 'https://ytdw.fyi/path', 'ftp://ytdw.fyi']) {
+    const email = `badorigin${Math.abs([...bad].reduce((a, c) => a * 31 + c.charCodeAt(0), 7))}@example.com`;
+    const response = await postJson('/api/auth/signup', credentials(email), undefined, { 'x-test-app-origin': bad });
+    assert.equal(response.status, 201, bad);
+    await settle();
+    assert.equal((await emailsTo(email)).length, 0, `no email for APP_ORIGIN=${JSON.stringify(bad)}`);
+    const db = await emailDb();
+    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ?').bind(email).first()).n, 0);
+  }
+  // A configured Previews-style origin is used verbatim.
+  const email = 'preview@example.com';
+  await postJson('/api/auth/signup', credentials(email), undefined, { 'x-test-app-origin': 'https://pr-1-ytdw.simons.workers.dev' });
+  assert.ok((await emailTo(email)).text.includes('https://pr-1-ytdw.simons.workers.dev/verify?token='));
+});
+
+test('forgot password answers identically for known and unknown addresses and only emails real accounts', async () => {
+  const email = 'forgetful@example.com';
+  await signUp(email);
+  await emailTo(email, 1);
+  const known = await forgot(email);
+  const unknown = await forgot('ghost@example.com');
+  assert.equal(known.status, 202);
+  assert.equal(unknown.status, 202);
+  assert.equal(known.headers.get('cache-control'), 'no-store');
+  assert.equal(await known.text(), await unknown.text());
+  assert.deepEqual(await (await forgot('GHOST@example.com')).json(), { message: FORGOT_MESSAGE });
+  const message = await emailTo(email, 2);
+  assert.equal(message.subject, 'Reset your YT;DW password');
+  assert.ok(message.text.includes('https://ytdw.fyi/reset-password?token='));
+  await settle();
+  assert.equal((await emailsTo('ghost@example.com')).length, 0);
+  const db = await emailDb();
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM email_log WHERE email = 'ghost@example.com'").first()).n, 0);
+});
+
+test('forgot password needs an auth Turnstile token, a valid address, and passes the auth rate limit first', async () => {
+  const before = h.verifications();
+  assert.equal((await forgot('not-an-email')).status, 400);
+  assert.equal(h.verifications(), before, 'validation fails before Siteverify');
+  assert.equal((await forgot('someone@example.com', 'fixture-token')).status, 403, 'summarize token is the wrong action');
+  assert.equal((await postJson('/api/auth/password/forgot', { email: 'someone@example.com' })).status, 403);
+  const limited = await postJson('/api/auth/password/forgot', { email: 'someone@example.com', turnstileToken: 'fixture-auth-token' }, undefined, { 'x-test-deny': 'auth' });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get('retry-after'), '60');
+  const afterLimit = h.verifications();
+  assert.equal((await forgot('someone@example.com')).status, 202);
+  assert.equal(h.verifications(), afterLimit + 1);
+});
+
+test('reset sets a new password, verifies the address, revokes every session, and starts a new one', async () => {
+  const email = 'reset@example.com';
+  const first = await signUp(email);
+  const second = cookieOf(await postJson('/api/auth/login', credentials(email)));
+  assert.ok(second && second !== first);
+  assert.equal((await forgot(email)).status, 202);
+  const token = tokenOf(await emailTo(email, 2));
+  const db = await emailDb();
+  const stored = await db.prepare('SELECT t.* FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = ? AND t.purpose = ?').bind(email, 'reset').first();
+  assert.equal(stored.expires_at - stored.created_at, 60 * 60 * 1000);
+  assert.deepEqual(await meOf(first), { email, emailVerified: false });
+
+  // Bad password rules and bad tokens fail without consuming the token.
+  assert.equal((await postJson('/api/auth/password/reset', { token, password: 'short' })).status, 400);
+  const badToken = await postJson('/api/auth/password/reset', { token: 'y'.repeat(43), password: 'a new password' });
+  assert.equal(badToken.status, 400);
+  assert.equal((await badToken.json()).error, INVALID_LINK);
+
+  const reset = await postJson('/api/auth/password/reset', { token, password: 'a new password' }, first);
+  assert.equal(reset.status, 200);
+  assert.match(reset.headers.get('set-cookie'), /^__Host-ytdw_session=[A-Za-z0-9_-]{43}; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/);
+  assert.deepEqual((await reset.json()).user, { email, emailVerified: true });
+  const fresh = cookieOf(reset);
+  assert.deepEqual(await meOf(fresh), { email, emailVerified: true });
+  assert.equal(await meOf(first), null);
+  assert.equal(await meOf(second), null);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.email = ?').bind(email).first()).n, 1);
+  assert.equal((await postJson('/api/auth/login', credentials(email))).status, 401, 'old password no longer works');
+  assert.equal((await postJson('/api/auth/login', credentials(email, 'a new password'))).status, 200);
+
+  const reuse = await postJson('/api/auth/password/reset', { token, password: 'yet another one' });
+  assert.equal(reuse.status, 400);
+  assert.equal((await reuse.json()).error, INVALID_LINK);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM auth_tokens WHERE purpose = 'reset' AND user_id = (SELECT id FROM users WHERE email = ?)").bind(email).first()).n, 0);
+});
+
+test('expired reset links are rejected and a verify token cannot reset a password', async () => {
+  const email = 'reset-expired@example.com';
+  await signUp(email);
+  const verifyToken = tokenOf(await emailTo(email, 1));
+  assert.equal((await postJson('/api/auth/password/reset', { token: verifyToken, password: 'sneaky password' })).status, 400);
+  assert.equal((await forgot(email)).status, 202);
+  const token = tokenOf(await emailTo(email, 2));
+  const db = await emailDb();
+  await db.prepare("UPDATE auth_tokens SET expires_at = ? WHERE purpose = 'reset' AND user_id = (SELECT id FROM users WHERE email = ?)").bind(Date.now() - 1, email).run();
+  assert.equal((await postJson('/api/auth/password/reset', { token, password: 'too late password' })).status, 400);
+  assert.equal((await postJson('/api/auth/login', credentials(email))).status, 200, 'password unchanged');
+  // The verify token was not consumed by the failed reset attempt.
+  assert.equal((await postJson('/api/auth/verify', { token: verifyToken })).status, 200);
+});
+
+test('change password checks the current one, revokes other sessions, and keeps this one', async () => {
+  const email = 'change@example.com';
+  const here = await signUp(email);
+  const elsewhere = cookieOf(await postJson('/api/auth/login', credentials(email)));
+  assert.equal((await postJson('/api/auth/password/change', { currentPassword: 'correct horse', newPassword: 'a new password' })).status, 401);
+  const wrong = await postJson('/api/auth/password/change', { currentPassword: 'wrong password', newPassword: 'a new password' }, here);
+  assert.equal(wrong.status, 403);
+  assert.equal((await wrong.json()).error, 'Current password is incorrect.');
+  assert.equal((await postJson('/api/auth/password/change', { currentPassword: 'correct horse', newPassword: 'short' }, here)).status, 400);
+  assert.equal((await postJson('/api/auth/password/change', { newPassword: 'a new password' }, here)).status, 400);
+  assert.ok(await meOf(elsewhere), 'failed attempts revoke nothing');
+
+  const changed = await postJson('/api/auth/password/change', { currentPassword: 'correct horse', newPassword: 'a new password' }, here);
+  assert.equal(changed.status, 200);
+  assert.equal(changed.headers.get('set-cookie'), null);
+  assert.deepEqual((await changed.json()).user, { email, emailVerified: false });
+  assert.ok(await meOf(here), 'current session survives');
+  assert.equal(await meOf(elsewhere), null, 'other sessions are revoked');
+  assert.equal((await postJson('/api/auth/login', credentials(email))).status, 401);
+  assert.equal((await postJson('/api/auth/login', credentials(email, 'a new password'))).status, 200);
+});
+
+test('deleting an account needs the password and removes the user, briefs, sessions, and tokens', async () => {
+  const email = 'delete@example.com';
+  const cookie = await signUp(email);
+  const other = cookieOf(await postJson('/api/auth/login', credentials(email)));
+  const { shareId } = await shareOf(270, 'lib-delete');
+  assert.equal((await postJson('/api/library', { shareId }, cookie)).status, 201);
+  const db = await emailDb();
+  const user = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  await emailTo(email, 1);
+  const count = async table => (await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).bind(user.id).first()).n;
+  assert.deepEqual([await count('saved_briefs'), await count('auth_tokens')], [1, 1]);
+
+  assert.equal((await postJson('/api/account/delete', { password: 'correct horse' })).status, 401);
+  const wrong = await postJson('/api/account/delete', { password: 'wrong password' }, cookie);
+  assert.equal(wrong.status, 403);
+  assert.equal((await wrong.json()).error, 'Password is incorrect.');
+  assert.equal((await postJson('/api/account/delete', {}, cookie)).status, 400);
+  assert.ok(await meOf(cookie));
+
+  const gone = await postJson('/api/account/delete', { password: 'correct horse' }, cookie);
+  assert.equal(gone.status, 204);
+  assert.equal(gone.headers.get('cache-control'), 'no-store');
+  assert.match(gone.headers.get('set-cookie'), /^__Host-ytdw_session=; .*Max-Age=0$/);
+  assert.equal(await db.prepare('SELECT id FROM users WHERE id = ?').bind(user.id).first(), null);
+  assert.deepEqual([await count('saved_briefs'), await count('sessions'), await count('auth_tokens')], [0, 0, 0]);
+  assert.equal(await meOf(cookie), null);
+  assert.equal(await meOf(other), null);
+  assert.equal((await postJson('/api/auth/login', credentials(email))).status, 401);
+  // The address is free again.
+  assert.equal((await postJson('/api/auth/signup', credentials(email, 'a different one'))).status, 201);
+});
+
+test('at most three emails per address per hour; throttled sends are silent and keep the older link valid', async () => {
+  const email = 'throttle@example.com';
+  await signUp(email);
+  await emailTo(email, 1);
+  assert.equal((await forgot(email)).status, 202);
+  await emailTo(email, 2);
+  assert.equal((await forgot(email)).status, 202);
+  const third = await emailTo(email, 3);
+  const fourth = await forgot(email);
+  assert.equal(fourth.status, 202);
+  assert.deepEqual(await fourth.json(), { message: FORGOT_MESSAGE });
+  await settle();
+  assert.equal((await emailsTo(email)).length, 3, 'the fourth email in an hour is not sent');
+  const cookie = cookieOf(await postJson('/api/auth/login', credentials(email)));
+  const resend = await postJson('/api/auth/verify/resend', {}, cookie);
+  assert.equal(resend.status, 202, 'throttling never changes the response');
+  await settle();
+  assert.equal((await emailsTo(email)).length, 3);
+  assert.equal((await postJson('/api/auth/password/reset', { token: tokenOf(third), password: 'still valid link' })).status, 200);
+
+  // Rows age out of the window, and old rows are pruned when the next email is reserved.
+  const db = await emailDb();
+  await db.prepare('UPDATE email_log SET sent_at = ? WHERE email = ?').bind(Date.now() - 2 * 24 * 60 * 60 * 1000, email).run();
+  assert.equal((await forgot(email)).status, 202);
+  await emailTo(email, 4);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM email_log WHERE email = ?').bind(email).first()).n, 1);
+});
+
+test('email send failures never change API responses and do not break later sends', async () => {
+  const email = 'flaky@example.com';
+  await h.failEmails(true);
+  try {
+    const signup = await postJson('/api/auth/signup', credentials(email));
+    assert.equal(signup.status, 201);
+    const cookie = cookieOf(signup);
+    assert.equal((await postJson('/api/auth/verify/resend', {}, cookie)).status, 202);
+    const known = await forgot(email);
+    const unknown = await forgot('nobody-flaky@example.com');
+    assert.equal(known.status, 202);
+    assert.equal(await known.text(), await unknown.text());
+    assert.equal((await postJson('/api/auth/signup', credentials(email))).status, 409);
+    await settle();
+    assert.equal((await emailsTo(email)).length, 0);
+  } finally {
+    await h.failEmails(false);
+  }
+  const cookie = cookieOf(await postJson('/api/auth/login', credentials(email)));
+  assert.equal((await postJson('/api/auth/verify/resend', {}, cookie)).status, 202);
+  // The throttle counts attempts, not deliveries: the failed attempts used the quota, so age them out of the window.
+  const db = await emailDb();
+  await db.prepare('UPDATE email_log SET sent_at = sent_at - 7200000 WHERE email = ?').bind(email).run();
+  assert.equal((await postJson('/api/auth/verify/resend', {}, cookie)).status, 202);
+  const message = await emailTo(email);
+  assert.equal((await postJson('/api/auth/verify', { token: tokenOf(message) })).status, 200);
+});
+
+test('emails link only to APP_ORIGIN (https://ytdw.fyi) and contain nothing the requester supplied', async () => {
+  const email = 'a<b>inj"ect@example.com';
+  await signUp(email);
+  const message = await emailTo(email);
+  await postJson('/api/auth/signup', credentials(email));
+  const notice = await emailTo(email, 2);
+  for (const mail of [message, notice]) {
+    for (const body of [mail.text, mail.html]) {
+      assert.ok(!body.includes('inj') && !body.includes('<b>') && !body.includes('localhost') && !body.includes('example.com'));
+      const urls = body.match(/https?:\/\/[^\s"<]+/g);
+      assert.ok(urls.length > 0 && urls.every(url => /^https:\/\/ytdw\.fyi\/(verify\?token=[A-Za-z0-9_-]{43}|\?auth=forgot)$/.test(url)), body);
+    }
+    assert.ok(!mail.subject.includes('inj') && !mail.subject.includes('example.com'));
+  }
+});
+
+test('/verify, /reset-password, and /account serve the app shell; token pages send no Referer', async () => {
+  for (const [path, referrer] of [['/verify', 'no-referrer'], ['/reset-password', 'no-referrer'], ['/account', 'strict-origin-when-cross-origin'], ['/library', 'strict-origin-when-cross-origin']]) {
+    for (const method of ['GET', 'HEAD']) {
+      const response = await h.request(`${path}?token=${'a'.repeat(43)}`, { method });
+      assert.equal(response.status, 200, `${method} ${path}`);
+      assert.match(response.headers.get('content-type'), /text\/html/);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.equal(response.headers.get('x-frame-options'), 'DENY');
+      assert.equal(response.headers.get('referrer-policy'), referrer, path);
+    }
+    assert.match(await (await h.request(path)).text(), /<html/i);
+  }
+});
+
+test('new routes share the mutation guards, the auth rate limit, and fixed methods', async () => {
+  const cookie = await signUp('guards@example.com');
+  const routes = [
+    ['/api/auth/verify', { token: 'a'.repeat(43) }], ['/api/auth/verify/resend', {}], ['/api/auth/password/forgot', { email: 'g@example.com', turnstileToken: 'fixture-auth-token' }],
+    ['/api/auth/password/reset', { token: 'a'.repeat(43), password: 'long enough' }], ['/api/auth/password/change', { currentPassword: 'x', newPassword: 'long enough' }],
+    ['/api/account/delete', { password: 'x' }],
+  ];
+  for (const [path, body] of routes) {
+    assert.equal((await postJson(path, body, cookie, { origin: 'https://evil.example' })).status, 403, `${path} cross-origin`);
+    assert.equal((await h.request(path, { method: 'POST', headers: { 'content-type': 'text/plain', cookie }, body: JSON.stringify(body) })).status, 400, `${path} content type`);
+    const limited = await postJson(path, body, cookie, { 'x-test-deny': 'auth' });
+    assert.equal(limited.status, 429, `${path} rate limit`);
+    assert.equal(limited.headers.get('retry-after'), '60');
+    assert.equal((await call(path, { cookie })).status, 405, `${path} GET`);
+  }
+  assert.equal((await postJson('/api/account/unknown', {}, cookie)).status, 404);
+  assert.deepEqual(await meOf(cookie), { email: 'guards@example.com', emailVerified: false });
 });

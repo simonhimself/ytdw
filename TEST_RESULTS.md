@@ -1,5 +1,39 @@
 # YT;DW Test Results
 
+## Email, recovery, and account management, Phase 1b — October 12, 2026
+
+Integration-verified on branch `feat/accounts-library` (uncommitted) before any
+deployment. Nothing was committed, pushed, deployed, or sent to real email or remote
+Cloudflare resources.
+
+- `npm run typecheck`: passed.
+- `npm test`: 43 of 43 passed.
+- `npm run test:ui`: 212 passed, 8 skipped (screenshot capture runs), against mocked APIs.
+- `npm run test:integration`: 8 of 8 passed (A5 and A7–A11, each at desktop 1440x900 and
+  mobile 390x844) against the real Worker, SQLite DOs, local D1 with both migrations, and
+  real cookies. The same 8 passed with `INTEGRATION_HOST=127.0.0.1`. The harness's mocked
+  EMAIL binding captured the messages; the emailed links were opened in Chromium after
+  rewriting `https://ytdw.fyi` to the harness origin.
+- `git diff --check`: passed.
+- Verified end to end: unverified banner, Resend (and the replaced link failing),
+  verification via the emailed link with the token stripped and the banner gone after
+  reload, forgot password → generic confirmation → reset link → signed in on `/library`,
+  single-use reset link, other contexts signed out by reset and by password change, old
+  password rejected and new accepted, duplicate-signup 409 with inline actions and a
+  token-free notice whose `/?auth=forgot` link opens forgot mode, `/account` change
+  password (wrong current refused), delete account (wrong password refused, Cancel keeps it,
+  Confirm signs out, all sessions end, sign-in fails, re-signup with the same email works),
+  and `referrer-policy: no-referrer` on `/verify` and `/reset-password`. No page errors and
+  no unexpected same-origin 4xx/5xx; the intentional 400/401/403/409 responses were
+  asserted individually.
+- Integration mismatches found: none. No changes to `public/` or `src/` were needed. The
+  integration helpers moved to `tests/integration/support.mjs`, shared by
+  `accounts.spec.mjs` and the new `recovery.spec.mjs`.
+- Not verified: real email delivery (Cloudflare Email Sending, sender domain/DNS), links
+  built from the production `APP_ORIGIN` opened over real HTTPS, real Turnstile for the
+  `auth` action on the forgot-password form, remote D1 with migration `0002`, token expiry
+  over real time (24 h / 1 h), and Safari/Firefox behavior.
+
 ## Accounts and library, Phase 1 — October 12, 2026
 
 Validated on branch `feat/accounts-library` (uncommitted) before any deployment.

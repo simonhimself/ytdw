@@ -12,7 +12,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "TURNSTILE_SITEKEY": "0x4AAAAAAE64yf1Lv7dzlttY",
-    "TURNSTILE_HOSTNAMES": "ytdw.fyi,www.ytdw.fyi,ytdw.simons.workers.dev"
+    "TURNSTILE_HOSTNAMES": "ytdw.fyi,www.ytdw.fyi,ytdw.simons.workers.dev",
+    "APP_ORIGIN": "https://ytdw.fyi"
   },
   "ai": {
     "binding": "AI"
@@ -73,10 +74,13 @@
       "migrations_dir": "migrations"
     }
   ],
+  "send_email": [
+    { "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytdw.fyi"] }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/s/*", "/library", "/health", "/stats", "/metadata", "/captions"]
+    "run_worker_first": ["/api/*", "/s/*", "/library", "/verify", "/reset-password", "/account", "/health", "/stats", "/metadata", "/captions"]
   },
   "observability": {
     "enabled": true,

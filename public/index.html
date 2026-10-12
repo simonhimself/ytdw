@@ -28,7 +28,8 @@
         <div class="account-popover">
           <p class="account-popover__label">Signed in as</p>
           <p id="account-email" class="account-popover__email"></p>
-          <button id="sign-out-button" class="copy-button" type="button">Sign out</button>
+          <a id="account-link" class="account-popover__action" href="/account">Account</a>
+          <button id="sign-out-button" class="account-popover__action" type="button">Sign out</button>
         </div>
       </details>
       <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
@@ -38,6 +39,15 @@
     </div>
   </header>
   <p id="account-status" class="sr-only" role="status" aria-atomic="true"></p>
+
+  <div id="verify-banner" class="verify-banner" hidden>
+    <p class="verify-banner__text">Verify your email to keep your account recoverable.</p>
+    <div class="verify-banner__actions">
+      <button id="verify-banner-resend" class="copy-button" type="button">Resend email</button>
+      <span id="verify-banner-sent" class="verify-banner__sent" tabindex="-1" hidden>Sent — check your inbox</span>
+    </div>
+    <p id="verify-banner-note" class="verify-banner__note" hidden></p>
+  </div>
 
   <main class="app-main">
     <section class="workspace" aria-labelledby="page-title">
@@ -78,6 +88,82 @@
         <strong>Could not summarize this video</strong>
         <span id="error-message"></span>
       </div>
+
+      <section id="verify-page" class="page" hidden aria-labelledby="verify-title">
+        <h1 id="verify-title" class="page-title" tabindex="-1">Verifying your email…</h1>
+        <p id="verify-detail" class="page-detail"></p>
+        <div class="page-actions">
+          <a id="verify-continue" class="copy-button copy-button--link" href="/library" hidden>Continue to library</a>
+          <button id="verify-resend" class="copy-button" type="button" hidden>Resend email</button>
+          <button id="verify-sign-in" class="copy-button" type="button" hidden>Sign in</button>
+          <button id="verify-retry" class="copy-button" type="button" hidden>Try again</button>
+        </div>
+      </section>
+
+      <section id="reset-page" class="page" hidden aria-labelledby="reset-title">
+        <h1 id="reset-title" class="page-title" tabindex="-1">Choose a new password</h1>
+        <form id="reset-form" class="page-form" novalidate>
+          <div class="field">
+            <label for="reset-password">New password</label>
+            <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required aria-describedby="reset-hint">
+            <p id="reset-hint" class="field__hint">At least 8 characters.</p>
+          </div>
+          <p id="reset-error" class="form-message form-message--error" role="alert" hidden></p>
+          <button id="reset-submit" class="dialog__submit page-submit" type="submit">Reset password</button>
+        </form>
+        <div id="reset-invalid" hidden>
+          <p id="reset-invalid-detail" class="page-detail"></p>
+          <div class="page-actions">
+            <button id="reset-request" class="copy-button" type="button">Request a new link</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="account-page" class="page" hidden aria-labelledby="account-title">
+        <h1 id="account-title" class="page-title" tabindex="-1">Account</h1>
+        <div id="account-signed-out" class="library-empty" hidden>
+          <strong>Sign in to manage your account</strong>
+          <p>Change your password or delete your account once you’re signed in.</p>
+          <button id="account-sign-in" class="copy-button" type="button">Sign in</button>
+        </div>
+        <div id="account-settings" hidden>
+          <dl class="account-summary">
+            <div><dt>Email</dt><dd id="account-page-email"></dd></div>
+            <div><dt>Status</dt><dd id="account-page-status"></dd></div>
+          </dl>
+
+          <section class="page-section" aria-labelledby="password-heading">
+            <h2 id="password-heading" class="page-section__title">Change password</h2>
+            <form id="password-form" class="page-form" novalidate>
+              <div class="field">
+                <label for="current-password">Current password</label>
+                <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" maxlength="256" required>
+              </div>
+              <div class="field">
+                <label for="new-password">New password</label>
+                <input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="256" required aria-describedby="new-password-hint">
+                <p id="new-password-hint" class="field__hint">At least 8 characters.</p>
+              </div>
+              <p id="password-error" class="form-message form-message--error" role="alert" hidden></p>
+              <p id="password-success" class="form-message form-message--success" hidden></p>
+              <button id="password-submit" class="copy-button page-button" type="submit">Change password</button>
+            </form>
+          </section>
+
+          <section class="page-section page-section--danger" aria-labelledby="delete-heading">
+            <h2 id="delete-heading" class="page-section__title">Delete account</h2>
+            <p class="page-detail">This permanently deletes your account and all of your saved briefs. This can’t be undone.</p>
+            <form id="delete-form" class="page-form" novalidate>
+              <div class="field">
+                <label for="delete-password">Password</label>
+                <input id="delete-password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+              </div>
+              <p id="delete-error" class="form-message form-message--error" role="alert" hidden></p>
+              <button id="delete-submit" class="copy-button copy-button--danger-outline page-button" type="submit">Delete account…</button>
+            </form>
+          </section>
+        </div>
+      </section>
 
       <section id="library" class="library" hidden aria-labelledby="library-title">
         <div id="library-list-view">
@@ -175,20 +261,31 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
         </button>
       </div>
-      <p id="auth-lede" class="dialog__lede">Save briefs and read them later.</p>
-      <div class="field">
-        <label for="auth-email">Email</label>
-        <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254" required>
+      <div id="auth-fields">
+        <p id="auth-lede" class="dialog__lede">Save briefs and read them later.</p>
+        <div class="field">
+          <label for="auth-email">Email</label>
+          <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254" required>
+        </div>
+        <div id="auth-password-field" class="field">
+          <label for="auth-password">Password</label>
+          <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="256" required aria-describedby="auth-hint">
+          <p id="auth-hint" class="field__hint" hidden>At least 8 characters.</p>
+          <p id="auth-forgot-row" class="dialog__forgot"><button id="auth-forgot" class="link-button" type="button">Forgot password?</button></p>
+        </div>
+        <p id="auth-error" class="dialog__error" role="alert" hidden></p>
+        <div id="auth-error-actions" class="dialog__error-actions" hidden>
+          <button id="auth-error-signin" class="link-button" type="button">Sign in</button>
+          <button id="auth-error-reset" class="link-button" type="button">Reset password</button>
+        </div>
+        <div id="auth-turnstile" class="turnstile"></div>
+        <button id="auth-submit" class="dialog__submit" type="submit">Sign in</button>
+        <p class="dialog__switch"><span id="auth-switch-prompt">New here?</span> <button id="auth-switch" class="link-button" type="button">Create an account</button></p>
       </div>
-      <div class="field">
-        <label for="auth-password">Password</label>
-        <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="256" required aria-describedby="auth-hint">
-        <p id="auth-hint" class="field__hint" hidden>At least 8 characters.</p>
+      <div id="auth-done" hidden>
+        <p id="auth-done-message" class="dialog__lede" tabindex="-1"></p>
+        <button id="auth-done-back" class="dialog__submit" type="button">Back to sign in</button>
       </div>
-      <p id="auth-error" class="dialog__error" role="alert" hidden></p>
-      <div id="auth-turnstile" class="turnstile"></div>
-      <button id="auth-submit" class="dialog__submit" type="submit">Sign in</button>
-      <p class="dialog__switch"><span id="auth-switch-prompt">New here?</span> <button id="auth-switch" class="link-button" type="button">Create an account</button></p>
     </form>
   </dialog>
 
@@ -199,6 +296,16 @@
       <div class="dialog__actions">
         <button id="confirm-cancel" class="copy-button" type="button">Cancel</button>
         <button id="confirm-delete" class="copy-button copy-button--danger" type="button">Delete</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="delete-account-dialog" class="dialog dialog--narrow" aria-labelledby="delete-account-title" aria-describedby="delete-account-detail">
+    <div class="dialog__form">
+      <h2 id="delete-account-title" class="dialog__title">Delete your account?</h2>
+      <p id="delete-account-detail" class="dialog__lede">Your account and all of your saved briefs will be permanently removed. This can’t be undone.</p>
+      <div class="dialog__actions">
+        <button id="delete-account-cancel" class="copy-button" type="button">Cancel</button>
+        <button id="delete-account-confirm" class="copy-button copy-button--danger-solid" type="button">Delete account</button>
       </div>
     </div>
   </dialog>

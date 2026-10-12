@@ -1,29 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { createHarness } from '../worker-harness.mjs';
+import { newPage as openPage, startHarness } from './support.mjs';
 
-// End-to-end check of accounts + library: the real frontend against the real
-// Worker, a real local D1 database, and real session cookies. Only the
-// Turnstile browser script is replaced (the Siteverify call is mocked inside
-// the harness, as in the backend suite).
-const TURNSTILE_SCRIPT = `
-  window.__widgets = {};
-  window.__nextWidget = 1;
-  window.turnstile = {
-    render(selector, options) { const id = window.__nextWidget++; window.__widgets[id] = options; return id; },
-    execute(id) { const options = window.__widgets[id]; setTimeout(() => options.callback(options.action === 'auth' ? 'fixture-auth-token' : 'fixture-token'), 10); },
-    reset() {}
-  };
-  window.onTurnstileLoad();
-`;
-
+// End-to-end check of accounts + library: see support.mjs for what is real and what is mocked.
 let h;
 let origin;
-test.beforeAll(async () => {
-  h = await createHarness();
-  const url = await h.mf.ready;
-  // Chromium treats loopback hosts as secure contexts, so the Secure __Host- cookie is accepted over http.
-  origin = `http://${process.env.INTEGRATION_HOST || 'localhost'}:${url.port}`;
-});
+test.beforeAll(async () => { ({ h, origin } = await startHarness()); });
 test.afterAll(async () => { await h?.mf.dispose(); });
 
 test.describe.configure({ mode: 'serial' });
@@ -33,27 +14,7 @@ const flow = (project) => project === 'mobile'
   ? { email: 'Mobile.Reader@Example.com', password: 'correct horse battery', videoId: '00000000098' }
   : { email: 'Desktop.Reader@Example.com', password: 'correct horse battery', videoId: '00000000099' };
 
-async function newPage(browser, project) {
-  const context = await browser.newContext({ viewport: project === 'mobile' ? { width: 390, height: 844 } : { width: 1440, height: 900 }, baseURL: origin });
-  const page = await context.newPage();
-  const problems = [];
-  const unexpected = [];
-  page.on('pageerror', error => problems.push(`pageerror: ${error.message}`));
-  // Chromium logs every failed fetch as a console error; HTTP statuses are asserted via `unexpected` instead.
-  page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource')) problems.push(`console: ${message.text()}`); });
-  // Same-origin 4xx/5xx responses are collected; steps that expect one consume it with expectStatus().
-  page.on('response', response => {
-    if (response.url().startsWith(origin) && response.status() >= 400) unexpected.push(`${response.status()} ${response.request().method()} ${new URL(response.url()).pathname}`);
-  });
-  await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?*', route => route.fulfill({ contentType: 'application/javascript', body: TURNSTILE_SCRIPT }));
-  await page.route(/fonts\.(googleapis|gstatic)\.com/, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
-  const expectStatus = (entry) => {
-    const index = unexpected.indexOf(entry);
-    expect(index, `expected ${entry} among ${JSON.stringify(unexpected)}`).toBeGreaterThanOrEqual(0);
-    unexpected.splice(index, 1);
-  };
-  return { context, page, problems, unexpected, expectStatus };
-}
+const newPage = (browser, project) => openPage(browser, project, origin);
 
 test('sign up, save, read, delete, sign out, sign in', async ({ browser }, info) => {
   const { email, password, videoId } = flow(info.project.name);

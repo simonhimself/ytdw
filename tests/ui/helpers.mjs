@@ -67,8 +67,14 @@ export function makeItem(id, overrides = {}) {
 const toListItem = ({ summary, transcriptTruncated, ...item }) => item;
 
 // Stateful fake of the accounts + library API. Records every request for assertions.
-export async function mockAccount(page, { user = null, items = [], authResponse, saveResponse } = {}) {
-  const state = { user, items: items.map(item => ({ ...item })), requests: [] };
+export const accountPassword = 'correct horse battery';
+export const invalidLink = 'This link is invalid or has expired.';
+export const forgotMessage = "If that address has an account, we've sent a link to reset the password.";
+
+// `user` is verified unless it says otherwise. `respond` maps an API path to a hook that may return a
+// custom route.fulfill() payload for the Phase 1b endpoints (verify, resend, forgot, reset, change, delete).
+export async function mockAccount(page, { user = null, items = [], authResponse, saveResponse, respond = {}, password = accountPassword, verifyToken = 'good-token', resetToken = 'reset-token', email = 'reader@example.com' } = {}) {
+  const state = { user: user && { emailVerified: true, ...user }, password, items: items.map(item => ({ ...item })), requests: [] };
   const counts = () => ({ unread: state.items.filter(item => item.readAt === null).length, all: state.items.length });
   await page.route('**/api/auth/me', route => route.fulfill({ json: { user: state.user } }));
   await page.route(url => url.pathname === '/api/auth/signup' || url.pathname === '/api/auth/login', async route => {
@@ -77,9 +83,52 @@ export async function mockAccount(page, { user = null, items = [], authResponse,
     state.requests.push({ method: request.method(), path: new URL(request.url()).pathname, body, contentType: request.headers()['content-type'] });
     const custom = authResponse?.(body, state);
     if (custom) return route.fulfill(custom);
-    state.user = { email: body.email };
-    await route.fulfill({ status: request.url().endsWith('signup') ? 201 : 200, json: { user: state.user } });
+    const signup = request.url().endsWith('signup');
+    // New accounts start unverified, which is what shows the banner.
+    state.user = { email: body.email, emailVerified: !signup };
+    await route.fulfill({ status: signup ? 201 : 200, json: { user: state.user } });
   });
+  const handlers = {
+    '/api/auth/verify': body => {
+      if (body.token !== verifyToken) return { status: 400, json: { error: invalidLink } };
+      if (state.user) state.user.emailVerified = true;
+      return { json: { user: state.user ?? { email, emailVerified: true } } };
+    },
+    '/api/auth/verify/resend': () => {
+      if (!state.user) return { status: 401, json: { error: 'Sign in to continue.' } };
+      return state.user.emailVerified ? { json: { user: state.user } } : { status: 202, json: {} };
+    },
+    '/api/auth/password/forgot': () => ({ status: 202, json: { message: forgotMessage } }),
+    '/api/auth/password/reset': body => {
+      if (body.token !== resetToken) return { status: 400, json: { error: invalidLink } };
+      state.password = body.password;
+      state.user = { email, emailVerified: true };
+      return { json: { user: state.user } };
+    },
+    '/api/auth/password/change': body => {
+      if (!state.user) return { status: 401, json: { error: 'Sign in to continue.' } };
+      if (body.currentPassword !== state.password) return { status: 403, json: { error: 'Current password is incorrect.' } };
+      state.password = body.newPassword;
+      return { json: { user: state.user } };
+    },
+    '/api/account/delete': body => {
+      if (!state.user) return { status: 401, json: { error: 'Sign in to continue.' } };
+      if (body.password !== state.password) return { status: 403, json: { error: 'Password is incorrect.' } };
+      state.user = null;
+      state.items = [];
+      return { status: 204, body: '' };
+    },
+  };
+  for (const [path, handler] of Object.entries(handlers)) {
+    await page.route(url => url.pathname === path, async route => {
+      const request = route.request();
+      const body = request.postDataJSON();
+      // pageSearch is the page's own query string when the request left, to prove tokens were stripped first.
+      const pageSearch = await page.evaluate(() => location.search).catch(() => null);
+      state.requests.push({ method: request.method(), path, body, contentType: request.headers()['content-type'], pageSearch });
+      await route.fulfill(respond[path]?.(body, state) ?? handler(body));
+    });
+  }
   await page.route('**/api/auth/logout', async route => {
     const request = route.request();
     state.requests.push({ method: 'POST', path: '/api/auth/logout', body: request.postDataJSON(), contentType: request.headers()['content-type'] });

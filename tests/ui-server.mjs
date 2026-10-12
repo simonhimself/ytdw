@@ -10,7 +10,8 @@ const headers = Object.fromEntries(headerFile.split('\n').filter(line => line.st
 const files = { '/': ['index.html', 'text/html'], '/styles.css': ['styles.css', 'text/css'], '/app.js': ['app.js', 'application/javascript'], '/theme.js': ['theme.js', 'application/javascript'] };
 createServer(async (request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
-  const file = pathname.startsWith('/s/') || pathname === '/library' ? files['/'] : files[pathname];
+  const shellPaths = ['/library', '/verify', '/reset-password', '/account'];
+  const file = pathname.startsWith('/s/') || shellPaths.includes(pathname) ? files['/'] : files[pathname];
   if (!file) { response.writeHead(404, headers); response.end('Not found'); return; }
   try {
     response.writeHead(200, { ...headers, 'content-type': file[1], 'cache-control': 'no-store' });

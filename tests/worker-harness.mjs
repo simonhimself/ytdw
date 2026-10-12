@@ -26,6 +26,14 @@ const captionHosts = new Map();
 // Browser Rendering is "down" unless a test selects a mode for the video, so
 // existing tests exercise the Sandbox fallback exactly as before.
 const browserModes = new Map();
+// Email Sending is mocked: messages are captured for tests, and delivery can be forced to fail.
+const sentEmails = [];
+let emailFailure = false;
+const EMAIL = { async send(message) {
+  if (emailFailure) throw Object.assign(new Error('Delivery failed for ' + JSON.stringify(message.to)), { code: 'E_DELIVERY_FAILED' });
+  sentEmails.push({ to: message.to, from: message.from, subject: message.subject, text: message.text, html: message.html });
+  return { messageId: 'fixture-' + sentEmails.length };
+} };
 async function player(id) {
   counts.browser = (counts.browser || 0) + 1;
   const mode = browserModes.get(id) ?? 'down';
@@ -85,7 +93,7 @@ export class SharedBrief extends BaseSharedBrief {
     return (await this.ctx.storage.get('brief')) ?? null;
   }
 }
-export default { async fetch(request, env) {
+export default { async fetch(request, env, ctx) {
   const url = new URL(request.url);
   const scope = request.headers.get('x-test-scope') || 'global';
   const legacy = url.pathname.startsWith('/__legacy');
@@ -95,6 +103,9 @@ export default { async fetch(request, env) {
   }
   if (url.pathname === '/__control') {
     const {action,id} = await request.json();
+    if (action === 'email:list') return Response.json(sentEmails);
+    if (action === 'email:clear') {sentEmails.length = 0;return Response.json(sentEmails);}
+    if (action === 'email:fail' || action === 'email:ok') {emailFailure = action === 'email:fail';return Response.json({emailFailure});}
     if (action === 'hold') held.add(id);
     if (action === 'break-transport') brokenTransports.add(id);
     if (action === 'slow-startup') slowStartups.add(id);
@@ -112,11 +123,12 @@ export default { async fetch(request, env) {
   const namespace = env.COORDINATOR;
   return worker.fetch(request, {...env,
     MIGRATION_TARGET: legacy ? 'https://ytdw.fyi' : undefined,
+    APP_ORIGIN: request.headers.get('x-test-app-origin') ?? 'https://ytdw.fyi',
     REQUEST_RATE_LIMIT:limit('request'),CLIENT_RATE_LIMIT:limit('client'),GLOBAL_RATE_LIMIT:limit('global'),
     SHARE_READ_RATE_LIMIT:limit('share-client'),SHARE_GLOBAL_RATE_LIMIT:limit('share-global'),
     AUTH_RATE_LIMIT:limit('auth'),LIBRARY_RATE_LIMIT:limit('library'),
-    COORDINATOR:{idFromName:()=>scope,get:()=>namespace.getByName(scope)},Sandbox:{exec},
-  });
+    COORDINATOR:{idFromName:()=>scope,get:()=>namespace.getByName(scope)},Sandbox:{exec},EMAIL,
+  }, ctx);
 } };
 `;
   const bundled = await build({ stdin: { contents: fixture, resolveDir: root, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', external: ['cloudflare:*'], plugins: [{ name: 'fixture', setup(builder) {
@@ -144,7 +156,7 @@ export default { async fetch(request, env) {
       TURNSTILE_SECRET: { type: 'text', value: 'fixture-secret' }, TURNSTILE_HOSTNAMES: { type: 'text', value: 'localhost' },
       TEST_TOKEN: { type: 'text', value: 'fixture-diagnostic-token' },
     },
-    assets: { directory: `${root}/public`, hasUserWorker: true, runWorkerFirst: ['/api/*', '/s/*', '/library', '/__*'] },
+    assets: { directory: `${root}/public`, hasUserWorker: true, runWorkerFirst: ['/api/*', '/s/*', '/library', '/verify', '/reset-password', '/account', '/__*'] },
   }, dev: { outboundService: { type: 'fetcher', handler: async (request) => {
     const url = new URL(request.url);
     if (url.hostname === 'www.youtube.com' && url.pathname === '/api/timedtext') {
@@ -173,6 +185,7 @@ export default { async fetch(request, env) {
   const control = async (action, id, scope = 'global') => (await request('/__control', { method: 'POST', headers: { 'x-test-scope': scope }, body: JSON.stringify({ action, id }) })).json();
   const post = (id, scope = 'global', headers = {}) => request('/api/summarize', { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-scope': scope, ...headers }, body: JSON.stringify({ url: `https://youtu.be/${id}`, turnstileToken: 'fixture-token' }) });
   return { mf, request, control, post, verifications: () => verifications,
+    emails: () => control('email:list'), clearEmails: () => control('email:clear'), failEmails: failing => control(failing ? 'email:fail' : 'email:ok'),
     captionRequests: () => [...captionRequests], failCaptions: (id, status) => captionStatuses.set(id, status),
     failBrowserCaptions: (id, status) => captionStatuses.set(`browser:${id}`, status), async reload() {
     options.workers[0].config.manifest.modules['index.js'].contents += '\n// restart fixture';

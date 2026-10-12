@@ -1,5 +1,6 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { DurableObject } from "cloudflare:workers";
+import { handleAccount, isAccountPath } from "./account";
 import { handleAuth } from "./auth";
 import { BadRequestError, SHARE_ID, readJsonObject, verifyTurnstile } from "./http";
 import { handleLibrary } from "./library";
@@ -40,6 +41,10 @@ const SECURITY_HEADERS = {
   "referrer-policy": "strict-origin-when-cross-origin",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
 };
+// Client-rendered views of the app shell. The emailed-link pages carry a
+// single-use token in the query string, so they must never leak it via Referer.
+const SHELL_PATHS = new Set(["/library", "/verify", "/reset-password", "/account"]);
+const TOKEN_PAGES = new Set(["/verify", "/reset-password"]);
 
 class UncertainExecutionError extends Error {
   constructor(message: string, readonly recoverUntil: number) { super(message); }
@@ -782,7 +787,7 @@ export class Coordinator extends DurableObject<Env> {
   }
 }
 
-async function routeRequest(request: Request, env: Env): Promise<Response> {
+async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const requestUrl = new URL(request.url);
 
     try {
@@ -806,15 +811,16 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
       if (request.method === "GET" && requestUrl.pathname.startsWith("/api/shares/")) {
         return handleSharedBrief(request, requestUrl.pathname.slice("/api/shares/".length), env);
       }
-      // Both routes are client-rendered views of the app shell.
-      if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/s/") || requestUrl.pathname === "/library")) {
+      // These routes are client-rendered views of the app shell.
+      if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/s/") || SHELL_PATHS.has(requestUrl.pathname))) {
         const shellUrl = new URL("/", request.url);
         const shell = await env.ASSETS.fetch(new Request(shellUrl, { method: request.method }));
         const response = new Response(shell.body, shell);
         for (const [name, value] of Object.entries(SHARE_HEADERS)) response.headers.set(name, value);
         return response;
       }
-      if (requestUrl.pathname.startsWith("/api/auth/")) return await handleAuth(request, env);
+      if (isAccountPath(requestUrl.pathname)) return await handleAccount(request, env, ctx);
+      if (requestUrl.pathname.startsWith("/api/auth/")) return await handleAuth(request, env, ctx);
       if (requestUrl.pathname === "/api/library" || requestUrl.pathname.startsWith("/api/library/")) return await handleLibrary(request, env);
       if (request.method === "POST" && requestUrl.pathname === "/api/summarize") {
         return await handleSummarize(request, env);
@@ -858,7 +864,7 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // One canonical host keeps the host-only __Host- session cookie valid
     // everywhere; aliases keep working for old links via redirect.
     const url = new URL(request.url);
@@ -866,11 +872,12 @@ export default {
       const status = request.method === "GET" || request.method === "HEAD" ? 301 : 308;
       return new Response(null, { status, headers: { location: `https://${CANONICAL_HOST}${url.pathname}${url.search}`, ...SECURITY_HEADERS } });
     }
-    const response = await routeRequest(request, env);
+    const response = await routeRequest(request, env, ctx);
     const secured = new Response(response.body, response);
     // _headers covers static assets; API and rewritten share responses need the
     // same policy explicitly, including their error paths.
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) secured.headers.set(name, value);
+    if (TOKEN_PAGES.has(url.pathname)) secured.headers.set("referrer-policy", "no-referrer");
     return secured;
   },
 } satisfies ExportedHandler<Env>;
