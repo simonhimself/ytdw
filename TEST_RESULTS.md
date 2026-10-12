@@ -255,7 +255,15 @@ checks for this release follow the table.
   foreign caption host rejected without any outbound request. The harness
   Sandbox now fails if asked to run anything other than metadata.
   `npm run typecheck` and `git diff --check` passed.
-- Production verification pending (not yet deployed).
+- **Production verification passed (October 12, 2026).** Deployed as version
+  `056196fb-a7c5-4900-8b0a-c0b64957068d` (commit `c90db41`) with
+  `--containers-rollout=none`. A live browser submission of `aUrSDMtzsEc`
+  returned 200 in 96 s with a complete brief and share link. Logs show a single
+  Sandbox command (metadata only) and no caption 429. This resolves the
+  session-binding caveat above: a Sandbox-generated caption URL fetched by the
+  Worker succeeded. A request that reached the previous version during the
+  deploy (07:49 UTC) still failed with the old in-Sandbox 429, as expected.
+- One video verified; broader reliability across videos is not yet measured.
 
 ### Compact centered result logo — local validation
 
