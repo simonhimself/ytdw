@@ -268,9 +268,14 @@ test('the header menu closes on outside clicks and is gone after sign-out', asyn
   await expect(page.locator('.queue-popover')).toBeVisible();
   await page.locator('.intro').click();
   await expect(page.locator('.queue-popover')).toBeHidden();
+  // Lines pasted but not added must not stay for the next person on this browser.
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  await page.getByLabel('Queue several videos').fill(link(ids[1]));
   await page.locator('#account-menu summary').click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.locator('#queue-menu')).toBeHidden();
+  await expect(page.locator('#queue-box')).toBeHidden();
+  await expect(page.locator('#queue-urls')).toHaveValue('');
   // Signed out, the link stays as an invitation to create an account.
   await expect(page.getByRole('button', { name: 'Queue several videos' })).toBeVisible();
 });
@@ -366,4 +371,52 @@ test('signed-out visitors with several links are asked to sign in', async ({ pag
   await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Sign up to queue them' }).click();
   await expect(page.getByRole('dialog', { name: 'Create account' })).toBeVisible();
+});
+
+test('a cached single-bar brief never flashes the header menu', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account);
+  await page.goto('/');
+  await page.evaluate(() => {
+    window.__menuShown = false;
+    new MutationObserver(() => { if (!document.querySelector('#queue-menu').hidden) window.__menuShown = true; })
+      .observe(document.querySelector('#queue-menu'), { attributes: true });
+  });
+  await expect.poll(() => page.evaluate(() => Boolean(window.__verification))).toBe(true);
+  await page.getByLabel('YouTube URL', { exact: true }).fill(`https://www.youtube.com/watch?v=${ids[0]}`);
+  await page.getByRole('button', { name: 'Summarize', exact: true }).click();
+  await expect(page.locator('#result-title')).toHaveText('First video brief');
+  await page.waitForTimeout(1200);
+  expect(await page.evaluate(() => window.__menuShown)).toBe(false);
+});
+
+test('a full library is reported per line, and a failed Add keeps focus in the box', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account, { results: { [ids[1]]: 'libraryFull' } });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  const box = page.getByLabel('Queue several videos');
+  await box.fill(link(ids[1]));
+  await page.getByRole('button', { name: 'Add 1 to queue' }).click();
+  await expect(page.locator('#queue-results li')).toHaveText([/Library is full\s*youtu.be\/PJrntzMA4iQ/]);
+  await expect(page.locator('#queue-results li')).toHaveClass('is-problem');
+  // The server fails: the error shows and the textarea has focus again.
+  await page.route('**/api/queue', route => route.request().method() === 'POST' ? route.fulfill({ status: 500, json: { error: 'Something broke.' } }) : route.fallback());
+  await box.fill(link(ids[2]));
+  await page.getByRole('button', { name: 'Add 1 to queue' }).click();
+  await expect(page.locator('#queue-error')).toBeVisible();
+  await expect(box).toBeFocused();
+  await expect(box).toHaveValue(link(ids[2]));
+});
+
+test('unverified accounts with several links are pointed at verification, keeping the links', async ({ page }) => {
+  const account = await mockAccount(page, { user: { ...user, emailVerified: false } });
+  await mockQueue(page, account);
+  await page.goto('/');
+  const bar = page.getByLabel('YouTube URL', { exact: true });
+  await bar.fill(`${link(ids[0])} ${link(ids[1])}`);
+  await page.getByRole('button', { name: 'Verify your email to queue them' }).click();
+  await expect(page.getByRole('button', { name: 'Resend email' })).toBeFocused();
+  await expect(bar).toHaveValue(`${link(ids[0])} ${link(ids[1])}`);
+  await expect(page.locator('#queue-box')).toBeHidden();
 });
