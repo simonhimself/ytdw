@@ -58,7 +58,10 @@ a way to prefill the original video URL and generate another brief.
 - Transcript source: Browser Rendering first (one fresh browser per new video,
   30-second budget), then the single Sandbox container as fallback. Each success
   logs `transcript_source` (`browser` or `sandbox`) and each browser failure logs
-  `browser_transcript_failed`; use these to judge whether the Sandbox can be retired.
+  `browser_transcript_failed`. Logs are retained only ~3 days, so daily counts
+  are also stored in the Coordinator: `GET /stats` with
+  `Authorization: Bearer $TEST_TOKEN` returns them. Use these counts to judge
+  whether the Sandbox can be retired.
 - Browser Rendering limits: 10 concurrent browsers and 10 new browsers per minute
   per account; Workers Paid includes 10 browser-hours per month.
 - One Sandbox container with globally coordinated work.

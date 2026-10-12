@@ -311,7 +311,15 @@ checks for this release follow the table.
   and `extract-zip` via `@cloudflare/puppeteer`'s Node-side `@puppeteer/browsers`
   tooling; neither package is present in the Worker bundle. Moderate advisories
   in `hono` and `sharp` also appear in the audit and were not investigated here.
-- Production verification pending (not yet deployed).
+- Review follow-ups: a browser launch that completes after its timeout is now
+  closed instead of holding a Browser Rendering slot. Because Observability
+  logs are retained only ~3 days, the Coordinator stores daily
+  `transcript_sources` counts, readable via `GET /stats` with the diagnostic
+  token (401 otherwise). The test asserts browser/sandbox counts and that a
+  rejected video records nothing. Still 13 passing tests.
+- Production verification pending (not yet deployed). The live check must use
+  a video not summarized in the previous 24 hours (cached results bypass both
+  paths) and confirm `transcript_source` reports `browser`.
 
 ### Compact centered result logo — local validation
 

@@ -51,7 +51,15 @@ export async function fetchPlayerResponse(
   timeoutMs: number,
 ): Promise<BrowserPlayerResponse> {
   const deadline = Date.now() + timeoutMs;
-  const browser = await withTimeout(puppeteer.launch(binding), deadline, "Browser launch");
+  const launching = puppeteer.launch(binding);
+  let browser: Awaited<typeof launching>;
+  try {
+    browser = await withTimeout(launching, deadline, "Browser launch");
+  } catch (error) {
+    // A launch that finishes after the timeout must not hold a browser slot.
+    launching.then((late) => late.close()).catch(() => {});
+    throw error;
+  }
   try {
     const page = await browser.newPage();
     // Only the watch page's HTML and scripts are needed.

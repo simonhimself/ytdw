@@ -618,7 +618,14 @@ function commandBudget(deadline: number): number {
   return remaining;
 }
 
-async function summarizeVideo(videoUrl: string, env: Env, deadline = Date.now() + PROCESSING_TIMEOUT_MS): Promise<SummaryResult> {
+type TranscriptSource = "browser" | "sandbox";
+
+async function summarizeVideo(
+  videoUrl: string,
+  env: Env,
+  deadline = Date.now() + PROCESSING_TIMEOUT_MS,
+  onTranscriptSource?: (source: TranscriptSource) => void,
+): Promise<SummaryResult> {
   const videoId = new URL(videoUrl).searchParams.get("v")!;
   const started = Date.now();
   const rejectLong = (duration: number) => {
@@ -628,7 +635,7 @@ async function summarizeVideo(videoUrl: string, env: Env, deadline = Date.now() 
   // fallback whenever the browser path fails for any reason other than a
   // definite user-facing rejection. transcript_source logs measure how often
   // the fallback runs, to decide whether the Sandbox can be retired.
-  let source: "browser" | "sandbox" = "browser";
+  let source: TranscriptSource = "browser";
   let video: { metadata: VideoMetadata; captions: string } | null = null;
   try {
     const { captionUrl, ...metadata } = await extractMetadataWithBrowser(env, videoId, deadline);
@@ -649,6 +656,7 @@ async function summarizeVideo(videoUrl: string, env: Env, deadline = Date.now() 
     video = { metadata, captions: await fetchCaptions(captionUrl, deadline) };
   }
   console.log(JSON.stringify({ event: "transcript_source", videoId, source, ms: Date.now() - started }));
+  onTranscriptSource?.(source);
   const { metadata, captions } = video;
   const transcript = fitTranscript(captionsToText(captions));
   if (!transcript.text) throw new BadRequestError("The captions were empty");
@@ -726,10 +734,28 @@ export class Coordinator extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS completed_expiry ON completed_summaries(expires_at);
       CREATE TABLE IF NOT EXISTS admissions (admitted_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS coordinator_state (id INTEGER PRIMARY KEY CHECK(id = 1), active_until INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS transcript_sources (day TEXT NOT NULL, source TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (day, source));
     `);
     // A restart can lose in-memory jobs while a subprocess is still finishing.
     // Preserve the single-extraction guarantee until the former job's deadline.
     this.recoveryUntil = ctx.storage.sql.exec<{ active_until: number }>("SELECT active_until FROM coordinator_state WHERE id = 1").toArray()[0]?.active_until ?? 0;
+  }
+
+  // Daily counts outlive Observability log retention (~3 days), so the
+  // Browser Rendering fallback rate can be judged over weeks.
+  private recordTranscriptSource(source: TranscriptSource): void {
+    try {
+      this.ctx.storage.sql.exec(
+        "INSERT INTO transcript_sources(day, source, count) VALUES (?, ?, 1) ON CONFLICT(day, source) DO UPDATE SET count = count + 1",
+        new Date().toISOString().slice(0, 10), source,
+      );
+    } catch { console.error(JSON.stringify({ event: "transcript_source_record_failed", source })); }
+  }
+
+  async transcriptSources(): Promise<{ day: string; source: string; count: number }[]> {
+    return this.ctx.storage.sql.exec<{ day: string; source: string; count: number }>(
+      "SELECT day, source, count FROM transcript_sources ORDER BY day DESC, source LIMIT 400",
+    ).toArray();
   }
 
   async summarize(inputUrl: string): Promise<SummaryOutcome> {
@@ -801,7 +827,10 @@ export class Coordinator extends DurableObject<Env> {
         let outcome: SummaryOutcome;
         try {
           this.ctx.storage.sql.exec("INSERT OR REPLACE INTO coordinator_state(id, active_until) VALUES (1, ?)", deadline + RECOVERY_GRACE_MS);
-          const result = await beforeDeadline(() => summarizeVideo(job.videoUrl, this.env, deadline), deadline);
+          const result = await beforeDeadline(
+            () => summarizeVideo(job.videoUrl, this.env, deadline, (source) => this.recordTranscriptSource(source)),
+            deadline,
+          );
           if (Date.now() >= deadline) throw new Error("Video processing timed out");
           const expiresAt = Date.now() + SHARE_TTL_MS;
           this.ctx.storage.sql.exec("INSERT OR REPLACE INTO completed_summaries(video_id, result, expires_at) VALUES (?, ?, ?)", job.videoId, JSON.stringify(result), expiresAt);
@@ -872,8 +901,8 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
       }
 
       // Extraction diagnostics would bypass the global queue. Keep only the
-      // authenticated, non-extracting health check on deployed Workers.
-      if (requestUrl.pathname !== "/health") return Response.json({ error: "Not found" }, { status: 404 });
+      // authenticated, non-extracting health check and transcript-source counts.
+      if (requestUrl.pathname !== "/health" && requestUrl.pathname !== "/stats") return Response.json({ error: "Not found" }, { status: 404 });
 
       const testToken = (env as Env & { TEST_TOKEN?: string }).TEST_TOKEN;
       if (!testToken) {
@@ -881,6 +910,10 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
       }
       if (!(await matchesDiagnosticToken(request, testToken))) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      if (requestUrl.pathname === "/stats") {
+        const coordinator = env.COORDINATOR.get(env.COORDINATOR.idFromName("global"));
+        return Response.json({ transcriptSources: await coordinator.transcriptSources() }, { headers: SHARE_HEADERS });
       }
 
       const sandbox = getSandbox(env.Sandbox, "summarizer", {

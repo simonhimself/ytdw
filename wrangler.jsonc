@@ -56,7 +56,7 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/s/*", "/health", "/metadata", "/captions"]
+    "run_worker_first": ["/api/*", "/s/*", "/health", "/stats", "/metadata", "/captions"]
   },
   "observability": {
     "enabled": true,

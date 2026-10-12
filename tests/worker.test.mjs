@@ -202,6 +202,14 @@ test('Browser Rendering is the primary transcript source and every browser failu
     assert.equal(fallback.sandboxRuns, 1, `one Sandbox run for ${mode}`);
     assert.equal(fetchedFor(id).at(-1), `https://www.youtube.com/api/timedtext?v=${id}&lang=en-orig&fmt=vtt`);
   }
+
+  // Daily source counts persist for judging the fallback rate; reads require the diagnostic token.
+  const stats = (scope, authorization = 'Bearer fixture-diagnostic-token') => h.request('/stats', { headers: { authorization, 'x-test-scope': scope } });
+  assert.equal((await stats('browser-ok', 'Bearer incorrect')).status, 401);
+  const day = new Date().toISOString().slice(0, 10);
+  assert.deepEqual((await (await stats('browser-ok')).json()).transcriptSources, [{ day, source: 'browser', count: 1 }]);
+  assert.deepEqual((await (await stats('browser-fallback-down-73')).json()).transcriptSources, [{ day, source: 'sandbox', count: 1 }]);
+  assert.deepEqual((await (await stats('browser-long')).json()).transcriptSources, []);
 });
 
 test('diagnostics fail closed and extraction endpoints cannot bypass the queue', async () => {
