@@ -1028,3 +1028,303 @@ test('new routes share the mutation guards, the auth rate limit, and fixed metho
   assert.equal((await postJson('/api/account/unknown', {}, cookie)).status, 404);
   assert.deepEqual(await meOf(cookie), { email: 'guards@example.com', emailVerified: false });
 });
+
+// --- Background summary queue (Phase 2) -------------------------------------
+const queueDb = () => h.mf.getD1Database('DB', 'test-ytdw');
+const youtu = n => `https://youtu.be/${video(n)}`;
+async function verifiedUser(email) {
+  const cookie = await signUp(email);
+  const db = await queueDb();
+  await db.prepare('UPDATE users SET email_verified_at = ? WHERE email = ?').bind(Date.now(), email).run();
+  const { id } = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  return { cookie, userId: id };
+}
+const enqueue = (cookie, urls, headers) => call('/api/queue', { method: 'POST', body: { urls }, cookie, headers });
+const queueOf = async cookie => (await call('/api/queue', { cookie })).json();
+const rowsOf = async userId => (await (await queueDb()).prepare('SELECT * FROM queue_items WHERE user_id = ? ORDER BY created_at, id').bind(userId).all()).results;
+const rowFor = async (userId, n) => (await rowsOf(userId)).find(row => row.video_id === video(n));
+// The runner works on real alarms, so tests wait for queue state. `tick` runs on
+// every poll (for example to clear the Coordinator's admission window).
+async function waitForQueue(predicate, { timeout = 15000, tick } = {}) {
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    if (tick) await tick();
+    if (await predicate()) return;
+    await sleep(50);
+  }
+  assert.fail('Queue condition did not become true');
+}
+const statusIs = (userId, n, status) => async () => (await rowFor(userId, n))?.status === status;
+// Stop leftover queued work so it cannot use the shared Coordinator in later tests.
+const drainQueue = async userId => (await queueDb()).prepare("UPDATE queue_items SET status = 'removed' WHERE user_id = ? AND status = 'queued'").bind(userId).run();
+
+test('the queue needs a session, a verified email for adding, and the library guards', async () => {
+  const id = '00000000-0000-4000-8000-000000000000';
+  for (const [path, method] of [['/api/queue', 'GET'], ['/api/queue', 'POST'], [`/api/queue/${id}/retry`, 'POST'], [`/api/queue/${id}`, 'DELETE']]) {
+    const response = await call(path, { method });
+    assert.equal(response.status, 401, `${method} ${path}`);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  }
+  const unverified = await signUp('queue-unverified@example.com');
+  const empty = await call('/api/queue', { cookie: unverified });
+  assert.equal(empty.status, 200);
+  assert.equal(empty.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await empty.json(), { items: [], quota: { used: 0, limit: 50, remaining: 50 } });
+  const refused = await enqueue(unverified, [youtu(300)]);
+  assert.equal(refused.status, 403);
+  assert.equal((await refused.json()).error, 'Verify your email to queue videos.');
+
+  const { cookie } = await verifiedUser('queue-guards@example.com');
+  assert.equal((await enqueue(cookie, [youtu(300)], { origin: 'https://evil.example' })).status, 403);
+  assert.equal((await h.request('/api/queue', { method: 'POST', headers: { 'content-type': 'text/plain', cookie }, body: JSON.stringify({ urls: [youtu(300)] }) })).status, 400);
+  const limited = await call('/api/queue', { cookie, headers: { 'x-test-deny': 'library' } });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get('retry-after'), '60');
+  for (const urls of [undefined, [], 'https://youtu.be/x', [1], Array.from({ length: 11 }, (_, n) => youtu(301 + n))]) {
+    const response = await enqueue(cookie, urls);
+    assert.equal(response.status, 400, JSON.stringify(urls));
+    assert.equal((await response.json()).error, 'Paste between 1 and 10 YouTube URLs.');
+  }
+  assert.equal((await call('/api/queue', { method: 'PATCH', cookie })).status, 405);
+  assert.equal((await call(`/api/queue/${id}`, { cookie })).status, 405);
+  assert.equal((await call(`/api/queue/${id}/retry`, { cookie })).status, 405);
+  assert.equal((await call(`/api/queue/${id}/other`, { method: 'POST', cookie })).status, 404);
+  assert.equal((await call('/api/queue/not-a-uuid', { method: 'DELETE', cookie })).status, 404);
+  assert.deepEqual((await queueOf(cookie)).items, []);
+});
+
+test('pasting reports each URL and dedupes within the paste, against the queue, and against the library', async () => {
+  const { cookie, userId } = await verifiedUser('queue-dedupe@example.com');
+  const { shareId } = await shareOf(310, 'queue-dedupe');
+  assert.equal((await call('/api/library', { method: 'POST', body: { shareId }, cookie })).status, 201);
+  await h.control('hold', video(311));
+  const response = await enqueue(cookie, [
+    ` ${youtu(311)} `, `https://www.youtube.com/watch?v=${video(311)}&t=42`, 'not a url', `https://example.com/watch?v=${video(312)}`,
+    `https://www.youtube.com/shorts/${video(310)}`,
+  ]);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const body = await response.json();
+  assert.deepEqual(body.results.map(({ url, videoId, status }) => ({ url, videoId, status })), [
+    { url: youtu(311), videoId: video(311), status: 'queued' },
+    { url: `https://www.youtube.com/watch?v=${video(311)}&t=42`, videoId: video(311), status: 'duplicate' },
+    { url: 'not a url', videoId: null, status: 'invalid' },
+    { url: `https://example.com/watch?v=${video(312)}`, videoId: null, status: 'invalid' },
+    { url: `https://www.youtube.com/shorts/${video(310)}`, videoId: video(310), status: 'alreadySaved' },
+  ]);
+  assert.equal(body.results[3].error, 'Only HTTPS YouTube video URLs are accepted');
+  assert.deepEqual(body.quota, { used: 1, limit: 50, remaining: 49 });
+  assert.equal(body.items.length, 1);
+  assert.deepEqual(Object.keys(body.items[0]).sort(), ['attempts', 'createdAt', 'error', 'id', 'retryable', 'status', 'videoId']);
+  assert.equal(body.items[0].videoId, video(311));
+
+  // While it is processing, pasting it again is reported as already queued.
+  await waitForQueue(statusIs(userId, 311, 'processing'));
+  assert.equal((await queueOf(cookie)).items[0].status, 'processing');
+  assert.equal((await (await enqueue(cookie, [youtu(311)])).json()).results[0].status, 'alreadyQueued');
+  await h.control('release', video(311));
+  await waitForQueue(statusIs(userId, 311, 'done'));
+  assert.equal((await (await enqueue(cookie, [youtu(311)])).json()).results[0].status, 'alreadySaved');
+  assert.deepEqual((await queueOf(cookie)).quota, { used: 1, limit: 50, remaining: 49 });
+});
+
+test('the runner saves finished briefs to the library as unread, one video at a time', async () => {
+  const { cookie, userId } = await verifiedUser('queue-runner@example.com');
+  const before = (await h.control('stats')).model;
+  await h.control('browser:ok', video(322));
+  const body = await (await enqueue(cookie, [youtu(320), youtu(321), youtu(322)])).json();
+  assert.deepEqual(body.results.map(r => r.status), ['queued', 'queued', 'queued']);
+  let maxProcessing = 0;
+  await waitForQueue(async () => {
+    const rows = await rowsOf(userId);
+    maxProcessing = Math.max(maxProcessing, rows.filter(row => row.status === 'processing').length);
+    return rows.every(row => row.status === 'done');
+  }, { tick: () => h.control('clear-budget') });
+  assert.equal(maxProcessing <= 1, true);
+  assert.equal((await h.control('stats')).model, before + 3);
+  const library = await (await call('/api/library?filter=unread', { cookie })).json();
+  assert.deepEqual(library.counts, { unread: 3, all: 3 });
+  assert.deepEqual(library.items.map(item => item.videoId).sort(), [video(320), video(321), video(322)]);
+  assert.ok(library.items.every(item => item.readAt === null && item.title === `Fixture ${item.videoId}`));
+  assert.equal(library.items.find(item => item.videoId === video(322)).uploader, 'Fixture channel');
+  const brief = await (await call(`/api/library/${library.items[0].id}`, { cookie })).json();
+  assert.equal(brief.item.summary, summary);
+  assert.deepEqual(await queueOf(cookie), { items: [], quota: { used: 3, limit: 50, remaining: 47 } });
+});
+
+test('permanent failures stop at once; transient failures back off and then fail as retryable', { timeout: 30000 }, async () => {
+  const { cookie, userId } = await verifiedUser('queue-failures@example.com');
+  await h.control('browser:long', video(330));
+  h.failCaptions(video(331), 429);
+  await h.control('foreign-caption-host', video(332));
+  await enqueue(cookie, [youtu(330), youtu(331), youtu(332)]);
+  await waitForQueue(async () => (await rowsOf(userId)).every(row => row.status === 'failed'), { timeout: 25000, tick: () => h.control('clear-budget') });
+  const items = (await queueOf(cookie)).items;
+  const long = items.find(item => item.videoId === video(330));
+  assert.deepEqual({ status: long.status, error: long.error, retryable: long.retryable, attempts: long.attempts },
+    { status: 'failed', error: 'Videos longer than six hours are not supported', retryable: false, attempts: 1 });
+  const throttled = items.find(item => item.videoId === video(331));
+  assert.equal(throttled.retryable, true);
+  assert.equal(throttled.attempts, 5);
+  assert.match(throttled.error, /YouTube is currently refusing caption requests/);
+  const unknown = items.find(item => item.videoId === video(332));
+  assert.equal(unknown.retryable, true);
+  assert.equal(unknown.attempts, 3);
+  assert.equal((await (await call('/api/library', { cookie })).json()).counts.all, 0);
+
+  // Retry only applies to retryable failures, resets attempts, and costs no quota.
+  const refused = await call(`/api/queue/${long.id}/retry`, { method: 'POST', cookie });
+  assert.equal(refused.status, 409);
+  h.failCaptions(video(331), undefined);
+  const retried = await call(`/api/queue/${throttled.id}/retry`, { method: 'POST', cookie });
+  assert.equal(retried.status, 200);
+  assert.equal(retried.headers.get('cache-control'), 'no-store');
+  const { item } = await retried.json();
+  assert.deepEqual({ status: item.status, attempts: item.attempts, error: item.error }, { status: 'queued', attempts: 0, error: null });
+  await waitForQueue(statusIs(userId, 331, 'done'), { tick: () => h.control('clear-budget') });
+  assert.equal((await call(`/api/queue/${throttled.id}/retry`, { method: 'POST', cookie })).status, 404);
+  assert.deepEqual((await queueOf(cookie)).quota, { used: 3, limit: 50, remaining: 47 });
+
+  // Remove hides the item; it still counts towards the quota.
+  const removed = await call(`/api/queue/${long.id}`, { method: 'DELETE', cookie });
+  assert.equal(removed.status, 204);
+  assert.equal((await call(`/api/queue/${long.id}`, { method: 'DELETE', cookie })).status, 404);
+  assert.deepEqual((await queueOf(cookie)).items.map(i => i.videoId), [video(332)]);
+  assert.equal((await rowFor(userId, 330)).status, 'removed');
+  assert.deepEqual((await queueOf(cookie)).quota, { used: 3, limit: 50, remaining: 47 });
+  // A removed video can be queued again.
+  assert.equal((await (await enqueue(cookie, [youtu(330)])).json()).results[0].status, 'queued');
+  await waitForQueue(async () => (await rowsOf(userId)).filter(row => row.video_id === video(330)).some(row => row.status === 'failed'), { tick: () => h.control('clear-budget') });
+});
+
+test('the daily quota of 50 counts every accepted URL, and concurrent pastes cannot overshoot it', async () => {
+  const db = await queueDb();
+  const fill = async (userId, count) => db.batch(Array.from({ length: count }, (_, n) => db.prepare(
+    "INSERT INTO queue_items(id, user_id, video_id, status, attempts, retryable, created_at, updated_at, next_attempt_at) VALUES (?, ?, ?, 'removed', 0, 1, ?, ?, ?)",
+  ).bind(crypto.randomUUID(), userId, `fill${String(n).padStart(7, '0')}`, Date.now(), Date.now(), Date.now())));
+  const alice = await verifiedUser('queue-quota@example.com');
+  await fill(alice.userId, 45);
+  // Rows older than 24 hours no longer count.
+  await db.prepare("INSERT INTO queue_items(id, user_id, video_id, status, attempts, retryable, created_at, updated_at, next_attempt_at) VALUES (?, ?, 'oldoldoldol', 'done', 1, 0, 1, 1, 1)")
+    .bind(crypto.randomUUID(), alice.userId).run();
+  await h.control('hold', video(340));
+  const body = await (await enqueue(alice.cookie, Array.from({ length: 10 }, (_, n) => youtu(340 + n)))).json();
+  await drainQueue(alice.userId);
+  assert.deepEqual(body.results.map(r => r.status), [...Array(5).fill('queued'), ...Array(5).fill('overQuota')]);
+  assert.deepEqual(body.quota, { used: 50, limit: 50, remaining: 0 });
+  assert.equal((await (await enqueue(alice.cookie, [youtu(355)])).json()).results[0].status, 'overQuota');
+
+  const bob = await verifiedUser('queue-race@example.com');
+  await fill(bob.userId, 45);
+  const [first, second] = await Promise.all([
+    enqueue(bob.cookie, Array.from({ length: 5 }, (_, n) => youtu(360 + n))),
+    enqueue(bob.cookie, Array.from({ length: 5 }, (_, n) => youtu(370 + n))),
+  ]);
+  await drainQueue(bob.userId);
+  const statuses = [...(await first.json()).results, ...(await second.json()).results].map(r => r.status);
+  assert.equal(statuses.filter(s => s === 'queued').length, 5);
+  assert.equal(statuses.filter(s => s === 'overQuota').length, 5);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM queue_items WHERE user_id = ? AND created_at > ?').bind(bob.userId, Date.now() - 86_400_000).first()).n, 50);
+  await h.control('release', video(340));
+  await waitForQueue(async () => !(await rowsOf(alice.userId)).some(row => row.status === 'processing'));
+});
+
+test('background work only takes spare capacity and never a waiting place', { timeout: 30000 }, async () => {
+  const { cookie, userId } = await verifiedUser('queue-fair@example.com');
+  await h.control('clear-budget');
+  // A visitor's job is running: queued work waits without starting or counting attempts.
+  await h.control('hold', video(380));
+  const visitor = h.post(video(380));
+  await waitFor(async () => (await h.control('stats')).pending.includes(video(380)));
+  await enqueue(cookie, [youtu(381)]);
+  await sleep(400);
+  assert.deepEqual({ status: (await rowFor(userId, 381)).status, attempts: (await rowFor(userId, 381)).attempts }, { status: 'queued', attempts: 0 });
+  // Both waiting places are still free for visitors, and the queue limit still applies to them.
+  const waiting = [h.post(video(382)), h.post(video(383))];
+  await sleep(100);
+  const overflow = await h.post(video(384));
+  assert.equal(overflow.status, 503);
+  assert.match((await overflow.json()).error, /queue is full/);
+  await h.control('release', video(380));
+  assert.equal((await visitor).status, 200);
+  for (const response of await Promise.all(waiting)) assert.equal(response.status, 200);
+  await waitForQueue(statusIs(userId, 381, 'done'));
+  assert.equal((await rowFor(userId, 381)).attempts, 0);
+
+  // Background work leaves two of the five admission places free for visitors.
+  await h.control('clear-budget');
+  await h.control('fill-window');
+  await enqueue(cookie, [youtu(385)]);
+  await sleep(400);
+  assert.equal((await rowFor(userId, 385)).status, 'queued');
+  await h.control('clear-budget');
+  await waitForQueue(statusIs(userId, 385, 'done'));
+
+  // Cached results are served at once, even while a visitor's job is running.
+  await h.control('clear-budget');
+  assert.equal((await h.post(video(386))).status, 200);
+  await h.control('hold', video(387));
+  const busy = h.post(video(387));
+  await waitFor(async () => (await h.control('stats')).pending.includes(video(387)));
+  await enqueue(cookie, [youtu(386)]);
+  await waitForQueue(statusIs(userId, 386, 'done'));
+  await h.control('release', video(387));
+  assert.equal((await busy).status, 200);
+});
+
+test('Remove during processing discards the result; restarts requeue orphaned work', async () => {
+  const { cookie, userId } = await verifiedUser('queue-remove@example.com');
+  await h.control('clear-budget');
+  await h.control('hold', video(390));
+  await enqueue(cookie, [youtu(390)]);
+  await waitForQueue(statusIs(userId, 390, 'processing'));
+  const id = (await rowFor(userId, 390)).id;
+  assert.equal((await call(`/api/queue/${id}`, { method: 'DELETE', cookie })).status, 204);
+  await h.control('release', video(390));
+  await waitFor(async () => !(await h.control('stats')).pending.includes(video(390)));
+  await settle();
+  assert.equal((await rowFor(userId, 390)).status, 'removed');
+  assert.equal((await (await call('/api/library', { cookie })).json()).counts.all, 0);
+
+  // A row left processing past its lease by a restarted runner is retried.
+  const db = await queueDb();
+  await db.prepare("INSERT INTO queue_items(id, user_id, video_id, status, attempts, retryable, created_at, updated_at, next_attempt_at, started_at) VALUES (?, ?, ?, 'processing', 0, 1, ?, ?, ?, 1)")
+    .bind(crypto.randomUUID(), userId, video(391), Date.now(), Date.now(), Date.now()).run();
+  await enqueue(cookie, [youtu(392)]);
+  await waitForQueue(async () => (await rowFor(userId, 391))?.status === 'done' && (await rowFor(userId, 392))?.status === 'done', { tick: () => h.control('clear-budget') });
+  assert.equal((await rowFor(userId, 391)).attempts, 1);
+  // With nothing left to do, the runner sets no alarm.
+  await waitForQueue(async () => (await h.control('runner:alarm')).alarm === null);
+});
+
+test('a full library fails the item without retry', async () => {
+  const { cookie, userId } = await verifiedUser('queue-full@example.com');
+  const db = await queueDb();
+  await db.batch(Array.from({ length: 1000 }, (_, n) => db.prepare(
+    "INSERT INTO saved_briefs(id, user_id, video_id, title, duration, summary, transcript_truncated, saved_at) VALUES (?, ?, ?, 't', 1, 's', 0, 1)",
+  ).bind(crypto.randomUUID(), userId, `filler${n}`)));
+  await enqueue(cookie, [youtu(395)]);
+  await waitForQueue(statusIs(userId, 395, 'failed'), { tick: () => h.control('clear-budget') });
+  const [item] = (await queueOf(cookie)).items;
+  assert.equal(item.retryable, false);
+  assert.match(item.error, /library is full/);
+});
+
+test('users cannot see or change each other\'s queue items', async () => {
+  const alice = await verifiedUser('queue-alice@example.com');
+  const bob = await verifiedUser('queue-bob@example.com');
+  await h.control('browser:long', video(398));
+  await enqueue(alice.cookie, [youtu(398)]);
+  await waitForQueue(statusIs(alice.userId, 398, 'failed'), { tick: () => h.control('clear-budget') });
+  const [item] = (await queueOf(alice.cookie)).items;
+  assert.deepEqual(await queueOf(bob.cookie), { items: [], quota: { used: 0, limit: 50, remaining: 50 } });
+  assert.equal((await call(`/api/queue/${item.id}`, { method: 'DELETE', cookie: bob.cookie })).status, 404);
+  await makeRetryable(alice.userId);
+  assert.equal((await call(`/api/queue/${item.id}/retry`, { method: 'POST', cookie: bob.cookie })).status, 404);
+  assert.equal((await rowFor(alice.userId, 398)).status, 'failed');
+  // Bob queues the same video independently.
+  assert.equal((await (await enqueue(bob.cookie, [youtu(398)])).json()).results[0].status, 'queued');
+  assert.deepEqual((await queueOf(alice.cookie)).items.map(i => i.id), [item.id]);
+});
+// Makes a failed row retryable so a 404 for another user cannot be a 409 in disguise.
+const makeRetryable = async userId => (await queueDb()).prepare("UPDATE queue_items SET retryable = 1 WHERE user_id = ? AND status = 'failed'").bind(userId).run();

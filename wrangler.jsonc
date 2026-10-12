@@ -111,6 +111,10 @@
       {
         "class_name": "SharedBrief",
         "name": "SHARED_BRIEFS"
+      },
+      {
+        "class_name": "QueueRunner",
+        "name": "QUEUE_RUNNER"
       }
     ]
   },
@@ -126,6 +130,10 @@
     {
       "new_sqlite_classes": ["SharedBrief"],
       "tag": "v3"
+    },
+    {
+      "new_sqlite_classes": ["QueueRunner"],
+      "tag": "v4"
     }
   ],
 
@@ -181,7 +189,8 @@
       "bindings": [
         { "class_name": "Sandbox", "name": "Sandbox" },
         { "class_name": "Coordinator", "name": "COORDINATOR" },
-        { "class_name": "SharedBrief", "name": "SHARED_BRIEFS" }
+        { "class_name": "SharedBrief", "name": "SHARED_BRIEFS" },
+        { "class_name": "QueueRunner", "name": "QUEUE_RUNNER" }
       ]
     },
     // Container support in Previews is partial. Browser Rendering is the primary
