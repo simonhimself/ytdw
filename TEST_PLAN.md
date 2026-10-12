@@ -155,6 +155,7 @@ Turnstile widgets for the `auth` action or the production cookie over HTTPS.
 | Q6 | Fairness | While a website job runs, queued work stays queued with no attempt counted and both waiting places stay available to visitors; background work never leaves fewer than two of the five admission places; cached results are served immediately. |
 | Q7 | Remove and recovery | Remove during processing discards the result; a row left processing past its lease is retried; with nothing to do the runner sets no alarm. |
 | Q8 | Isolation | Another user's items look absent for list, Retry, and Remove; both users can queue the same video. |
+| Q8b | Turn-taking | With one user's paste in progress, another user's item runs next, before the first user's remaining items; items in one paste run in pasted order. |
 | Q9 | UI (desktop/mobile, both themes) | Link and box only for signed-in users on the home page; box opens on demand, counts lines, closes with Cancel/Escape and restores focus; per-line problems keep only fixable lines; more than 10 lines is refused client-side; unverified users see the disabled box; header menu appears only while items exist, lists states, Retry/Remove work and keep focus, finished briefs are announced and update the badge, the menu fits the viewport and closes on outside click, Escape, and sign-out. |
 | Q10 | Integration | Real Worker, runner alarms, and D1: sign up, see the disabled box, verify via the emailed link, queue two videos plus an invalid line, watch the header menu disappear, and find both briefs unread in the library. |
 

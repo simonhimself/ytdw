@@ -5,7 +5,7 @@
 User story: "I want to summarize more videos and read them later." Anyone can
 create an account, save briefs to a personal library, and mark them read.
 
-Phase 1 (this document): email + password accounts, a library with Save,
+Phase 1: email + password accounts, a library with Save,
 read/unread, an Unread/All filter, and delete.
 Phase 2 (see "Background summary queue" below): paste several URLs, leave, and
 briefs land in the library as unread. Jobs go through the existing `Coordinator`
