@@ -487,6 +487,52 @@ test('users cannot see or modify each other\'s library items', async () => {
   assert.equal(mine.item.readAt, null);
 });
 
+test('sharing a saved brief mints a new 24-hour snapshot that outlives the original link', async () => {
+  const alice = await signUp('sharer@example.com');
+  const bob = await signUp('not-sharer@example.com');
+  await h.control('browser:ok', video(270));
+  const original = await shareOf(270, 'lib-share');
+  const item = (await (await call('/api/library', { method: 'POST', body: { shareId: original.shareId }, cookie: alice })).json()).item;
+  await h.control('share:expire', original.shareId);
+  assert.equal((await h.request(`/api/shares/${original.shareId}`)).status, 404);
+
+  const before = Date.now();
+  const response = await call(`/api/library/${item.id}/share`, { method: 'POST', cookie: alice });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const { share } = await response.json();
+  assert.match(share.url, /^\/s\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(share.url, original.data.share.url);
+  assert.ok(share.expiresAt >= before + 24 * 60 * 60 * 1000 - 1000 && share.expiresAt <= Date.now() + 24 * 60 * 60 * 1000);
+
+  const shared = await h.request(`/api${share.url.replace('/s/', '/shares/')}`);
+  assert.equal(shared.status, 200);
+  assert.deepEqual(await shared.json(), {
+    id: video(270), title: original.data.title, uploader: 'Fixture channel', duration: original.data.duration,
+    summary: original.data.summary, transcriptTruncated: false, share,
+  });
+  // Reads never renew the lifetime, and every click mints a separate link.
+  assert.equal((await (await h.request(`/api${share.url.replace('/s/', '/shares/')}`)).json()).share.expiresAt, share.expiresAt);
+  const second = (await (await call(`/api/library/${item.id}/share`, { method: 'POST', cookie: alice })).json()).share;
+  assert.notEqual(second.url, share.url);
+  await h.control('share:expire', share.url.split('/').pop());
+  assert.equal((await h.request(`/api${share.url.replace('/s/', '/shares/')}`)).status, 404);
+
+  // Other users' items, malformed ids, and unknown actions all look absent.
+  assert.equal((await call(`/api/library/${item.id}/share`, { method: 'POST', cookie: bob })).status, 404);
+  assert.equal((await call('/api/library/not-a-uuid/share', { method: 'POST', cookie: alice })).status, 404);
+  assert.equal((await call(`/api/library/${item.id}/other`, { method: 'POST', cookie: alice })).status, 404);
+  assert.equal((await call(`/api/library/${item.id}/share/extra`, { method: 'POST', cookie: alice })).status, 404);
+  assert.equal((await call(`/api/library/${item.id}/share`, { cookie: alice })).status, 405);
+  // The session, JSON content type, Origin check, and rate limit apply like every other mutation.
+  const anonymous = await call(`/api/library/${item.id}/share`, { method: 'POST' });
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.headers.get('cache-control'), 'no-store');
+  assert.equal((await h.request(`/api/library/${item.id}/share`, { method: 'POST', headers: { 'content-type': 'text/plain', cookie: alice }, body: '{}' })).status, 400);
+  assert.equal((await call(`/api/library/${item.id}/share`, { method: 'POST', cookie: alice, headers: { origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await call(`/api/library/${item.id}/share`, { method: 'POST', cookie: alice, headers: { 'x-test-deny': 'library' } })).status, 429);
+});
+
 test('a library holds at most 1,000 saved briefs', async () => {
   const cookie = await signUp('full@example.com');
   const db = await h.mf.getD1Database('DB', 'test-ytdw');

@@ -73,7 +73,7 @@ export const forgotMessage = "If that address has an account, we've sent a link 
 
 // `user` is verified unless it says otherwise. `respond` maps an API path to a hook that may return a
 // custom route.fulfill() payload for the Phase 1b endpoints (verify, resend, forgot, reset, change, delete).
-export async function mockAccount(page, { user = null, items = [], authResponse, saveResponse, respond = {}, password = accountPassword, verifyToken = 'good-token', resetToken = 'reset-token', email = 'reader@example.com' } = {}) {
+export async function mockAccount(page, { user = null, items = [], authResponse, saveResponse, shareResponse, respond = {}, password = accountPassword, verifyToken = 'good-token', resetToken = 'reset-token', email = 'reader@example.com' } = {}) {
   const state = { user: user && { emailVerified: true, ...user }, password, items: items.map(item => ({ ...item })), requests: [] };
   const counts = () => ({ unread: state.items.filter(item => item.readAt === null).length, all: state.items.length });
   await page.route('**/api/auth/me', route => route.fulfill({ json: { user: state.user } }));
@@ -149,6 +149,14 @@ export async function mockAccount(page, { user = null, items = [], authResponse,
       return route.fulfill({ json: { items: visible.map(toListItem), counts: counts() } });
     }
     if (method === 'GET') return item ? route.fulfill({ json: { item } }) : route.fulfill({ status: 404, json: { error: 'Not found.' } });
+    // POST /api/library/:id/share mints a link from the saved copy (checked before the save branch).
+    if (method === 'POST' && url.pathname.split('/')[4] === 'share') {
+      const custom = shareResponse?.(item, state);
+      if (custom) return route.fulfill(custom);
+      if (!item) return route.fulfill({ status: 404, json: { error: 'Brief not found.' } });
+      state.shareCount = (state.shareCount ?? 0) + 1;
+      return route.fulfill({ json: { share: { url: `/s/${shareId.slice(0, -2)}${String(10 + state.shareCount).slice(-2)}`, expiresAt: Date.now() + 86400000 } } });
+    }
     if (method === 'POST') {
       const custom = saveResponse?.(request.postDataJSON(), state);
       if (custom) return route.fulfill(custom);

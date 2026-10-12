@@ -254,18 +254,26 @@
     element.textContent = text;
   }
 
+  const validShare = (share) => Boolean(share) && /^\/s\/[0-9a-f-]{36}$/.test(share.url) &&
+    Number.isFinite(share.expiresAt) && Number.isFinite(new Date(share.expiresAt).getTime());
+
+  const shareExpiryText = (share) =>
+    `Share link available until ${new Date(share.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Anyone with the link can read and forward it.`;
+
   function showResult(data, { libraryItem = null } = {}) {
     // Validate and build the replacement before changing the previous brief.
     if (!data || !/^[A-Za-z0-9_-]{11}$/.test(data.id) || typeof data.title !== "string" ||
         !Number.isFinite(data.duration) || data.duration < 0 || typeof data.summary !== "string" || !data.summary.trim() ||
-        (data.share !== null && (!data.share || !/^\/s\/[0-9a-f-]{36}$/.test(data.share.url) ||
-          !Number.isFinite(data.share.expiresAt) || !Number.isFinite(new Date(data.share.expiresAt).getTime())))) {
+        (data.share !== null && !validShare(data.share))) {
       throw new Error("The service returned an incomplete brief. Please try again.");
     }
     const summaryContent = renderSummary(data.summary);
+    // Library items create their link on demand, so the note stays empty until Share is used.
     const expiryText = data.share
-      ? `Share link available until ${new Date(data.share.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Anyone with the link can read and forward it.`
-      : "Sharing and saving are temporarily unavailable. You can still copy this brief.";
+      ? shareExpiryText(data.share)
+      : libraryItem ? "" : "Sharing and saving are temporarily unavailable. You can still copy this brief.";
+    // A library item can always attempt Share; its link is created by the click.
+    const canShare = Boolean(data.share) || Boolean(libraryItem);
     currentResult = data;
     currentLibraryItem = libraryItem;
     byId("result-channel").textContent = data.uploader || "YouTube";
@@ -276,9 +284,9 @@
     byId("regenerate-link").href = `/?url=${encodeURIComponent(videoUrl)}`;
     byId("regenerate-link").hidden = true;
     byId("transcript-note").textContent = data.transcriptTruncated ? "Long transcript condensed" : "Full transcript processed";
-    shareButton.disabled = !data.share;
+    shareButton.disabled = !canShare;
     copyButton.disabled = false;
-    shareButton.setAttribute("aria-disabled", String(!data.share));
+    shareButton.setAttribute("aria-disabled", String(!canShare));
     copyButton.setAttribute("aria-disabled", "false");
     actionStatus("copy-status", "");
     actionStatus("share-status", "");
@@ -289,8 +297,9 @@
     byId("previous-result-note").hidden = true;
     byId("share-expiry").hidden = Boolean(data.share) || Boolean(libraryItem);
     byId("share-expiry").textContent = expiryText;
-    // Library items reuse this article but swap Share/Save for read-state and delete.
-    for (const button of [shareButton, saveButton]) button.hidden = Boolean(libraryItem);
+    // Library items reuse this article but swap Save for read-state and delete.
+    saveButton.hidden = Boolean(libraryItem);
+    shareButton.hidden = false;
     for (const button of [readButton, deleteButton, byId("library-back")]) button.hidden = !libraryItem;
     byId("library-meta").hidden = !libraryItem;
     renderSaveButton();
@@ -398,28 +407,51 @@
 
   shareButton.addEventListener("click", async () => {
     const brief = currentResult;
-    if (!brief?.share || shareButton.disabled || shareInFlight === brief) return;
+    const item = currentLibraryItem;
+    if (!brief || (!brief.share && !item) || shareButton.disabled || shareInFlight === brief) return;
     shareInFlight = brief;
     shareButton.setAttribute("aria-disabled", "true");
-    byId("share-expiry").hidden = false;
+    byId("share-expiry").hidden = !brief.share;
     byId("share-fallback").hidden = true;
     actionStatus("share-status", "");
     let expired = false;
     try {
-      const id = brief.share.url.split("/").pop();
-      // Ask the server, not the user's clock. Checking never renews a snapshot.
-      const response = await fetch(`/api/shares/${encodeURIComponent(id)}`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-      if (currentResult !== brief) return;
-      if (response.status === 404) {
-        expired = true;
-        byId("share-expiry").textContent = "This share link has expired or is unavailable. You can still copy the brief.";
-        byId("regenerate-link").hidden = false;
-        actionStatus("share-status", "Share link unavailable. Summarize this video again to create a new link.");
-        return;
+      if (brief.share) {
+        const id = brief.share.url.split("/").pop();
+        // Ask the server, not the user's clock. Checking never renews a snapshot.
+        const response = await fetch(`/api/shares/${encodeURIComponent(id)}`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+        if (currentResult !== brief) return;
+        if (response.status === 404 && item) {
+          // The saved copy outlives its link, so mint a new one below.
+          brief.share = null;
+        } else if (response.status === 404) {
+          expired = true;
+          byId("share-expiry").textContent = "This share link has expired or is unavailable. You can still copy the brief.";
+          byId("regenerate-link").hidden = false;
+          actionStatus("share-status", "Share link unavailable. Summarize this video again to create a new link.");
+          return;
+        } else if (!response.ok) {
+          const data = await responseData(response);
+          throw new Error(data.error || "Could not check this link. Please try again.");
+        }
       }
-      if (!response.ok) {
-        const data = await responseData(response);
-        throw new Error(data.error || "Could not check this link. Please try again.");
+      if (!brief.share) {
+        // Library items carry no link of their own: create one from the saved copy.
+        const response = await apiRequest(`/api/library/${encodeURIComponent(item.id)}/share`, { method: "POST", body: {} });
+        if (response.status === 401) {
+          endSession();
+          if (currentLibraryItem === item) showSignedOut(true);
+          return;
+        }
+        if (currentResult !== brief) return;
+        if (response.status === 404) throw new Error("This brief is no longer in your library.");
+        if (!response.ok) throw new Error(await failureMessage(response, "Could not create a share link. Please try again."));
+        const { share } = await responseData(response);
+        if (currentResult !== brief) return;
+        if (!validShare(share)) throw new Error("The service returned an incomplete share link. Please try again.");
+        brief.share = share;
+        byId("share-expiry").textContent = shareExpiryText(share);
+        byId("share-expiry").hidden = false;
       }
       const url = new URL(brief.share.url, location.origin).href;
       try {

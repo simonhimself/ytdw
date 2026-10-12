@@ -1,5 +1,6 @@
 import { currentUser } from "./auth";
 import { SHARE_ID, apiError, apiJson, guardMutation, guardedRoute, readJsonObject, tooManyRequests } from "./http";
+import { createShare } from "./share";
 
 const MAX_SAVED_BRIEFS = 1_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -66,10 +67,27 @@ async function listBriefs(env: Env, userId: string, filter: string | null): Prom
   return apiJson({ items: results.map(toItem), counts: { unread: counts?.unread ?? 0, all: counts?.total ?? 0 } });
 }
 
-async function itemRoute(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+// Saved briefs outlive their original share link, so sharing mints a new 24-hour
+// snapshot from the saved copy. A Durable Object failure throws into guardedRoute (503).
+async function shareBrief(env: Env, userId: string, id: string): Promise<Response> {
+  const row = await env.DB.prepare(`SELECT ${ITEM_COLUMNS}, summary, transcript_truncated FROM saved_briefs WHERE id = ? AND user_id = ?`)
+    .bind(id, userId).first<BriefRow>();
+  if (!row) return apiError(404, "Brief not found.");
+  const share = await createShare(env, {
+    id: row.video_id, title: row.title, uploader: row.uploader ?? undefined, duration: row.duration,
+    summary: row.summary, transcriptTruncated: row.transcript_truncated === 1,
+  });
+  return apiJson({ share });
+}
+
+async function itemRoute(request: Request, env: Env, userId: string, path: string): Promise<Response> {
   // Every query is scoped to the session's user: other users' ids look absent.
   const notFound = () => apiError(404, "Brief not found.");
-  if (!UUID.test(id)) return notFound();
+  const [id, action, ...extra] = path.split("/");
+  if (!UUID.test(id) || extra.length > 0 || (action !== undefined && action !== "share")) return notFound();
+  if (action === "share") {
+    return request.method === "POST" ? shareBrief(env, userId, id) : apiError(405, "Method not allowed", { allow: "POST" });
+  }
 
   if (request.method === "GET") {
     const row = await env.DB.prepare(`SELECT ${ITEM_COLUMNS}, summary, transcript_truncated FROM saved_briefs WHERE id = ? AND user_id = ?`)

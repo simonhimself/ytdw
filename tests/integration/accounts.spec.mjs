@@ -87,6 +87,24 @@ test('sign up, save, read, delete, sign out, sign in', async ({ browser }, info)
   await page.reload();
   await expect(page.locator('#result-title')).toHaveText(`Fixture ${videoId}`);
 
+  // Share the saved copy: Share sits between Copy and Mark as unread, mints a fresh /s/ link, and
+  // the copied link opens the brief in the same browser context.
+  expect(await page.locator('.result__actions button:visible').allTextContents()).toEqual(['Copy', 'Share', 'Mark as unread', 'Delete']);
+  await page.evaluate(() => {
+    window.__copies = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copies.push(text); } } });
+  });
+  await page.locator('#share-button').click();
+  await expect(page.locator('#share-status')).toHaveText('Share link copied.');
+  await expect(page.locator('#share-expiry')).toContainText('Share link available until');
+  const sharedLink = await page.evaluate(() => window.__copies[0]);
+  expect(sharedLink).toMatch(/\/s\/[0-9a-f-]{36}$/);
+  const sharedPage = await context.newPage();
+  await sharedPage.goto(sharedLink);
+  await expect(sharedPage.locator('#result-title')).toHaveText(`Fixture ${videoId}`);
+  await expect(sharedPage.locator('#result-summary')).toContainText('Test brief');
+  await sharedPage.close();
+
   // Delete with confirmation.
   await page.locator('#delete-button').click();
   await expect(page.locator('#confirm-dialog')).toBeVisible();

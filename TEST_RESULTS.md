@@ -1,5 +1,23 @@
 # YT;DW Test Results
 
+## Share from the library — October 12, 2026
+
+Validated on branch `feat/accounts-library` (uncommitted); check A12 in `TEST_PLAN.md`.
+Nothing was committed, pushed, or deployed (`wrangler deploy` not run).
+
+- `npm run typecheck`: passed.
+- `npm test`: 44 of 44 passed (one new test for `POST /api/library/:id/share`).
+- `npm run test:ui`: 224 passed, 8 skipped (screenshot capture runs).
+- `npm run test:integration`: 8 passed, 2 skipped (demo recording); the A5 flow now
+  includes Share on a saved item and opening the copied `/s/` link.
+- `git diff --check`: passed (apart from pre-existing whitespace in the generated
+  `worker-configuration.d.ts`).
+- Preview `feat-accounts-library` refreshed with `wrangler preview` (unique deployment
+  `a39fe4f0`): `/` returned 200, and `POST /api/library/<uuid>/share` without a session
+  returned 401 JSON. The served `app.js` contains the new Share code.
+- Not verified: the 503 path when the Durable Object fails (no harness control for it),
+  and a signed-in Share click on the Preview itself.
+
 ## Email, recovery, and account management, Phase 1b — October 12, 2026
 
 Integration-verified on branch `feat/accounts-library` (uncommitted) before any

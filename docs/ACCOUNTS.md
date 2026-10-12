@@ -73,6 +73,7 @@ signed in / bad credentials; 403 verification or origin failure; 404 not found;
 | `POST /api/library` | `{ shareId }` | `201 { item: LibraryItem }`, or `200 { item, alreadySaved: true }` if this video is already saved |
 | `PATCH /api/library/:id` | `{ read: boolean }` | `200 { item: LibraryItem }` |
 | `DELETE /api/library/:id` | — | `204` |
+| `POST /api/library/:id/share` | `{}` | `200 { share: { url: "/s/<id>", expiresAt } }` |
 
 ```ts
 type LibraryItem = { id: string; videoId: string; title: string; uploader: string | null;
@@ -85,6 +86,14 @@ server copies that snapshot, so users cannot store forged brief content. If the
 snapshot has expired, it returns 404 "This brief is no longer available to save.
 Summarize the video again." Any `/api/library*` call without a valid session
 returns 401.
+
+`POST /api/library/:id/share` exists because saved briefs outlive the 24-hour
+snapshot they were saved from. It copies the saved brief into a **new**
+`SharedBrief` snapshot under a fresh random id (the same code `withShare()` uses),
+so each call returns a different link with a full 24-hour lifetime; reads never
+renew it. It uses the same session, JSON content-type, Origin, and
+`LIBRARY_RATE_LIMIT` guards as other library mutations. Another user's or a
+malformed id returns 404; a Durable Object failure returns 503 `{ error }`.
 
 ## UI
 
@@ -99,9 +108,14 @@ returns 401.
   library.
 - `/library` (served as the app shell, like `/s/*`): Unread/All tabs with
   counts; a list showing title, channel, duration, and saved date; open an item
-  to read it with the existing brief rendering, plus Mark as read / Mark unread,
-  Delete (with confirmation), Copy, and Watch on YouTube. Opening an item does
+  to read it with the existing brief rendering, plus Copy, Share, Mark as read /
+  Mark unread, Delete (with confirmation), and Watch on YouTube. Opening an item does
   not mark it read automatically. Includes empty states.
+- Library item **Share**: same copy, clipboard fallback field, expiry note, and
+  screen-reader announcements as Share on a fresh result. The link does not exist
+  until the click: the client calls `POST /api/library/:id/share`, then copies it.
+  A repeat click on the same open item re-checks that link and creates a new one
+  only if it has expired.
 
 ## Email, recovery, and account management (Phase 1b)
 

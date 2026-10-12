@@ -306,8 +306,9 @@ test('opening an item renders the brief; mark read/unread updates counts without
   await expect(page.locator('#result-summary li')).toHaveCount(2);
   await expect(page.getByRole('link', { name: /Watch on YouTube/ })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=vid00000003');
   await expect(page.locator('#library-meta')).toContainText('Unread');
-  await expect(page.getByRole('button', { name: 'Share', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Share', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeHidden();
+  expect(await page.locator('.result__actions button:visible').allTextContents()).toEqual(['Copy', 'Share', 'Mark as read', 'Delete']);
   expect(account.requests.some(request => request.method === 'PATCH')).toBe(false);
 
   await page.getByRole('button', { name: 'Copy', exact: true }).click();
@@ -334,6 +335,82 @@ test('opening an item renders the brief; mark read/unread updates counts without
   await expect(page.locator('#result-title')).toHaveText('Newest unread brief');
   await page.goBack();
   await expect(page.locator('#library-list li')).toHaveCount(2);
+});
+
+test('Share on a library item creates a link on click, copies it, and shows the expiry', async ({ page }) => {
+  const account = await mockAccount(page, { user: { email }, items: seedItems() });
+  await page.goto('/library?item=3');
+  await expect(page.locator('#result-title')).toHaveText('Newest unread brief');
+  const shareButton = page.getByRole('button', { name: 'Share', exact: true });
+  // Nothing is created, and no note shows, until Share is used.
+  await expect(page.locator('#share-expiry')).toBeHidden();
+  expect(account.requests.some(request => request.path.endsWith('/share'))).toBe(false);
+
+  await shareButton.click();
+  await expect(page.locator('#share-status')).toHaveText('Share link copied.');
+  await expect(page.locator('#share-expiry')).toContainText('Share link available until');
+  await expect(page.locator('#share-expiry')).toContainText('Anyone with the link can read and forward it.');
+  const posts = account.requests.filter(request => request.path === '/api/library/3/share');
+  expect(posts).toHaveLength(1);
+  expect(posts[0].method).toBe('POST');
+  expect(posts[0].contentType).toContain('application/json');
+  const copied = await page.evaluate(() => window.__copies);
+  expect(copied).toHaveLength(1);
+  expect(copied[0]).toMatch(/\/s\/[0-9a-f-]{36}$/);
+  await expect(page.locator('#share-fallback')).toBeHidden();
+  await expect(page.locator('#share-status')).toHaveClass(/sr-only/);
+
+  // A second click re-checks the existing link instead of creating another one.
+  await shareButton.click();
+  await expect.poll(() => page.evaluate(() => window.__copies.length)).toBe(2);
+  expect(account.requests.filter(request => request.path.endsWith('/share'))).toHaveLength(1);
+
+  // Opening another item starts from a clean slate.
+  await page.goto('/library?item=1');
+  await expect(page.locator('#result-title')).toHaveText('Oldest unread brief');
+  await expect(page.locator('#share-expiry')).toBeHidden();
+  await expect(page.locator('#share-status')).toHaveText('');
+});
+
+test('Share on a library item falls back to a selectable link when copying is blocked', async ({ page }) => {
+  await mockAccount(page, { user: { email }, items: seedItems() });
+  await page.addInitScript(() => { window.__denyClipboard = true; });
+  await page.goto('/library?item=3');
+  await page.getByRole('button', { name: 'Share', exact: true }).click();
+  await expect(page.locator('#share-fallback')).toBeVisible();
+  await expect(page.locator('#share-url')).toHaveValue(/\/s\/[0-9a-f-]{36}$/);
+  await expect(page.locator('#share-url')).toBeFocused();
+  await expect(page.locator('#share-status')).toHaveText('Select and copy the link below.');
+  await expect(page.locator('#share-status')).not.toHaveClass(/sr-only/);
+  await expect(page.locator('#share-expiry')).toContainText('Share link available until');
+});
+
+test('Share on a library item reports failures and a lapsed session', async ({ page }) => {
+  let mode = 'error';
+  const account = await mockAccount(page, {
+    user: { email }, items: seedItems(),
+    shareResponse: () => mode === 'error' ? { status: 503, json: { error: 'Something went wrong. Please try again.' } }
+      : mode === 'missing' ? { status: 404, json: { error: 'Brief not found.' } }
+        : mode === 'session' ? { status: 401, json: { error: 'Sign in to use your library.' } } : undefined,
+  });
+  await page.goto('/library?item=3');
+  const shareButton = page.getByRole('button', { name: 'Share', exact: true });
+  await shareButton.click();
+  await expect(page.locator('#share-status')).toHaveText('Something went wrong. Please try again.');
+  await expect(page.locator('#share-status')).not.toHaveClass(/sr-only/);
+  await expect(page.locator('#share-fallback')).toBeHidden();
+  expect(await page.evaluate(() => window.__copies)).toEqual([]);
+  await expect(shareButton).toBeEnabled();
+
+  mode = 'missing';
+  await shareButton.click();
+  await expect(page.locator('#share-status')).toHaveText('This brief is no longer in your library.');
+
+  // A lapsed session sends the reader back to the sign-in prompt like other library actions.
+  mode = 'session';
+  await shareButton.click();
+  await expect(page.locator('#library-signed-out-title')).toHaveText('Your session has ended');
+  expect(account.requests.filter(request => request.path.endsWith('/share'))).toHaveLength(3);
 });
 
 test('deep links open an item directly and a missing item explains itself', async ({ page }) => {

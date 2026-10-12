@@ -4,6 +4,7 @@ import { handleAccount, isAccountPath } from "./account";
 import { handleAuth } from "./auth";
 import { BadRequestError, SHARE_ID, readJsonObject, verifyTurnstile } from "./http";
 import { handleLibrary } from "./library";
+import { createShare } from "./share";
 import { fetchPlayerResponse, type BrowserPlayerResponse } from "./youtube-browser";
 
 export { Sandbox } from "@cloudflare/sandbox";
@@ -77,7 +78,7 @@ interface ExtractedVideoMetadata extends VideoMetadata {
   captionUrl: string | null;
 }
 
-interface SummaryResult extends VideoMetadata {
+export interface SummaryResult extends VideoMetadata {
   summary: string;
   transcriptTruncated: boolean;
 }
@@ -163,9 +164,7 @@ export class SharedBrief extends DurableObject<Env> {
 async function withShare(result: SummaryResult, env: Env): Promise<Response> {
   let share: { url: string; expiresAt: number } | null = null;
   try {
-    const id = crypto.randomUUID();
-    const expiresAt = await env.SHARED_BRIEFS.getByName(id).create(result);
-    share = { url: `/s/${id}`, expiresAt };
+    share = await createShare(env, result);
   } catch {
     // A storage outage should not hide an otherwise successful brief.
     console.error(JSON.stringify({ event: "share_creation_failed" }));
