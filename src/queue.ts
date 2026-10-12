@@ -23,6 +23,8 @@ const MAX_UNKNOWN_ATTEMPTS = 3;
 const LEASE_MS = 8 * 60 * 1000;
 const LIST_LIMIT = 200;
 const ACTIVE = "('queued', 'processing', 'failed')";
+// Waiting or running: pasting the video again cannot help. A failed one can be replaced.
+const PENDING = "('queued', 'processing')";
 const ITEM_COLUMNS = "id, video_id, status, error, retryable, attempts, created_at";
 
 interface QueueRow {
@@ -35,7 +37,7 @@ interface QueueRow {
   created_at: number;
 }
 
-type ResultStatus = "queued" | "duplicate" | "alreadyQueued" | "alreadySaved" | "invalid" | "overQuota";
+type ResultStatus = "queued" | "duplicate" | "alreadyQueued" | "alreadySaved" | "invalid" | "libraryFull" | "overQuota";
 
 interface QueueResult {
   url: string;
@@ -104,31 +106,41 @@ async function enqueue(env: Env, user: SessionUser, urls: unknown): Promise<Resp
 
   if (candidates.length > 0) {
     const now = Date.now();
-    // Each insert checks the library, the active queue, and the rolling quota in
-    // the same statement, and the batch runs as one transaction, so concurrent
-    // pastes cannot overshoot the quota or queue a video twice.
+    // Each insert checks the library, the active queue, the library size, and the
+    // rolling quota in the same statement, and the batch runs as one transaction, so
+    // concurrent pastes cannot overshoot the quota or queue a video twice. A failed
+    // row for the same video is replaced, under the same conditions, just before.
+    const allowed = `NOT EXISTS (SELECT 1 FROM saved_briefs WHERE user_id = ?1 AND video_id = ?2)
+         AND NOT EXISTS (SELECT 1 FROM queue_items WHERE user_id = ?1 AND video_id = ?2 AND status IN ${PENDING})
+         AND (SELECT COUNT(*) FROM saved_briefs WHERE user_id = ?1) < ?3
+         AND (SELECT COUNT(*) FROM queue_items WHERE user_id = ?1 AND created_at > ?4) < ?5`;
+    const replace = env.DB.prepare(
+      `UPDATE queue_items SET status = 'removed', updated_at = ?6
+       WHERE user_id = ?1 AND video_id = ?2 AND status = 'failed' AND ${allowed}`,
+    );
     const insert = env.DB.prepare(
       `INSERT OR IGNORE INTO queue_items(id, user_id, video_id, status, attempts, retryable, created_at, updated_at, next_attempt_at)
-       SELECT ?, ?, ?, 'queued', 0, 1, ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM saved_briefs WHERE user_id = ? AND video_id = ?)
-         AND NOT EXISTS (SELECT 1 FROM queue_items WHERE user_id = ? AND video_id = ? AND status IN ${ACTIVE})
-         AND (SELECT COUNT(*) FROM queue_items WHERE user_id = ? AND created_at > ?) < ?`,
+       SELECT ?7, ?1, ?2, 'queued', 0, 1, ?6, ?6, ?6
+       WHERE ${allowed} AND NOT EXISTS (SELECT 1 FROM queue_items WHERE user_id = ?1 AND video_id = ?2 AND status = 'failed')`,
     );
-    const inserted = await env.DB.batch(candidates.map(({ id, videoId }) => insert.bind(
-      id, user.id, videoId, now, now, now, user.id, videoId, user.id, videoId, user.id, now - DAY_MS, DAILY_QUEUE_LIMIT,
-    )));
-    const rejected = candidates.filter((_, index) => inserted[index].meta.changes === 0);
+    const inserted = await env.DB.batch(candidates.flatMap(({ id, videoId }) => {
+      const args = [user.id, videoId, MAX_SAVED_BRIEFS, now - DAY_MS, DAILY_QUEUE_LIMIT, now] as const;
+      return [replace.bind(...args), insert.bind(...args, id)];
+    }));
+    const rejected = candidates.filter((_, index) => inserted[2 * index + 1].meta.changes === 0);
     if (rejected.length > 0) {
       const ids = rejected.map(({ videoId }) => videoId);
       const marks = ids.map(() => "?").join(", ");
-      const [saved, queued] = await env.DB.batch<{ video_id: string }>([
+      const [saved, queued, library] = await env.DB.batch<{ video_id: string; n: number }>([
         env.DB.prepare(`SELECT video_id FROM saved_briefs WHERE user_id = ? AND video_id IN (${marks})`).bind(user.id, ...ids),
-        env.DB.prepare(`SELECT video_id FROM queue_items WHERE user_id = ? AND status IN ${ACTIVE} AND video_id IN (${marks})`).bind(user.id, ...ids),
+        env.DB.prepare(`SELECT video_id FROM queue_items WHERE user_id = ? AND status IN ${PENDING} AND video_id IN (${marks})`).bind(user.id, ...ids),
+        env.DB.prepare("SELECT COUNT(*) AS n FROM saved_briefs WHERE user_id = ?").bind(user.id),
       ]);
       const savedIds = new Set(saved.results.map((row) => row.video_id));
       const queuedIds = new Set(queued.results.map((row) => row.video_id));
+      const libraryFull = (library.results[0]?.n ?? 0) >= MAX_SAVED_BRIEFS;
       for (const { result, videoId } of rejected) {
-        result.status = savedIds.has(videoId) ? "alreadySaved" : queuedIds.has(videoId) ? "alreadyQueued" : "overQuota";
+        result.status = savedIds.has(videoId) ? "alreadySaved" : queuedIds.has(videoId) ? "alreadyQueued" : libraryFull ? "libraryFull" : "overQuota";
       }
     }
     if (rejected.length < candidates.length) await kickRunner(env);

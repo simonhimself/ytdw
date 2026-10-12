@@ -1195,6 +1195,14 @@ test('permanent failures stop at once; transient failures back off and then fail
   // A removed video can be queued again.
   assert.equal((await (await enqueue(cookie, [youtu(330)])).json()).results[0].status, 'queued');
   await waitForQueue(async () => (await rowsOf(userId)).filter(row => row.video_id === video(330)).some(row => row.status === 'failed'), { tick: () => h.control('clear-budget') });
+  // Pasting a failed video again replaces the failed item (and spends quota).
+  assert.equal((await (await enqueue(cookie, [youtu(330)])).json()).results[0].status, 'queued');
+  const again = (await rowsOf(userId)).filter(row => row.video_id === video(330)).map(row => row.status).sort();
+  assert.equal(again.length, 3);
+  assert.equal(again.filter(status => status === 'removed').length, 2);
+  assert.equal((await queueOf(cookie)).items.filter(i => i.videoId === video(330)).length, 1);
+  assert.deepEqual((await queueOf(cookie)).quota, { used: 5, limit: 50, remaining: 45 });
+  await waitForQueue(async () => (await rowsOf(userId)).filter(row => row.video_id === video(330)).some(row => row.status === 'failed'), { tick: () => h.control('clear-budget') });
 });
 
 test('the daily quota of 50 counts every accepted URL, and concurrent pastes cannot overshoot it', async () => {
@@ -1325,13 +1333,22 @@ test('a runner restarted mid-job leaves a wake-up for the orphaned row', async (
   await waitForQueue(async () => (await h.control('runner:alarm')).alarm === null);
 });
 
-test('a full library fails the item without retry', async () => {
+test('a full library refuses new items, and fails one that was queued before it filled', async () => {
   const { cookie, userId } = await verifiedUser('queue-full@example.com');
   const db = await queueDb();
-  await db.batch(Array.from({ length: 1000 }, (_, n) => db.prepare(
+  const fill = (from, count) => db.batch(Array.from({ length: count }, (_, n) => db.prepare(
     "INSERT INTO saved_briefs(id, user_id, video_id, title, duration, summary, transcript_truncated, saved_at) VALUES (?, ?, ?, 't', 1, 's', 0, 1)",
-  ).bind(crypto.randomUUID(), userId, `filler${n}`)));
+  ).bind(crypto.randomUUID(), userId, `filler${from + n}`)));
+  await fill(0, 999);
+  // One place left: the paste is accepted, then the library fills before it runs.
+  await h.control('hold', video(395));
   await enqueue(cookie, [youtu(395)]);
+  await fill(999, 1);
+  const refused = await (await enqueue(cookie, [youtu(396)])).json();
+  assert.equal(refused.results[0].status, 'libraryFull');
+  assert.equal(await rowFor(userId, 396), undefined);
+  assert.deepEqual(refused.quota, { used: 1, limit: 50, remaining: 49 });
+  await h.control('release', video(395));
   await waitForQueue(statusIs(userId, 395, 'failed'), { tick: () => h.control('clear-budget') });
   const [item] = (await queueOf(cookie)).items;
   assert.equal(item.retryable, false);
