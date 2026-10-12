@@ -511,3 +511,14 @@ test('/library serves the app shell with no-store and security headers', async (
   }
   assert.match(await (await h.request('/library')).text(), /<html/i);
 });
+
+test('alias hosts redirect to the canonical host, keeping path and query', async () => {
+  for (const host of ['www.ytdw.fyi', 'ytdw.simons.workers.dev']) {
+    const page = await h.mf.dispatchFetch(`https://${host}/s/abc?x=1`, { redirect: 'manual' });
+    assert.equal(page.status, 301);
+    assert.equal(page.headers.get('location'), 'https://ytdw.fyi/s/abc?x=1');
+    const api = await h.mf.dispatchFetch(`https://${host}/api/auth/login`, { method: 'POST', redirect: 'manual' });
+    assert.equal(api.status, 308);
+  }
+  assert.equal((await h.request('/library')).status, 200);
+});

@@ -31,6 +31,8 @@ const MAX_PENDING_JOBS = 3; // One running video and at most two waiting videos.
 const GLOBAL_WINDOW_MS = 10_000;
 const GLOBAL_NEW_JOBS_PER_WINDOW = 5;
 const RECOVERY_GRACE_MS = 10_000;
+const CANONICAL_HOST = "ytdw.fyi";
+const ALIAS_HOSTS = new Set(["www.ytdw.fyi", "ytdw.simons.workers.dev"]);
 const SECURITY_HEADERS = {
   "content-security-policy": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; object-src 'none'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
@@ -857,6 +859,13 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // One canonical host keeps the host-only __Host- session cookie valid
+    // everywhere; aliases keep working for old links via redirect.
+    const url = new URL(request.url);
+    if (ALIAS_HOSTS.has(url.hostname)) {
+      const status = request.method === "GET" || request.method === "HEAD" ? 301 : 308;
+      return new Response(null, { status, headers: { location: `https://${CANONICAL_HOST}${url.pathname}${url.search}`, ...SECURITY_HEADERS } });
+    }
     const response = await routeRequest(request, env);
     const secured = new Response(response.body, response);
     // _headers covers static assets; API and rewritten share responses need the
