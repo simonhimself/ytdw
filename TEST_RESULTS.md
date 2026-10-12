@@ -1,5 +1,18 @@
 # YT;DW Test Results
 
+## Queue review fixes production release — October 12, 2026
+
+- Merged as simonhimself/ytdw#8 (runner keeps an alarm for the in-flight item; header
+  menu refresh keeps focus). No migration or container change.
+- Before deploying, on `main` at `ac14091`: `npm run typecheck` passed; `npm test` 58
+  of 58 passed on two runs (one earlier run had the existing startup-delay test fail
+  once on timing); `tests/ui/queue.spec.mjs` 56 passed.
+- Deployed with `--containers-rollout=none` as version
+  `580ebef0-d73f-43e5-b162-5f544174667a`. On `https://ytdw.fyi/`: `/`, `/library`,
+  `/account` 200; `GET`, `POST`, `DELETE /api/queue*` without a session 401 JSON with
+  `no-store`; served `app.js` is identical to `main`.
+- Deleted the merged branch `claude/project-thread-prqta6`.
+
 ## Queue review fixes: orphaned rows and menu focus — October 12, 2026
 
 Branch `claude/project-thread-prqta6`; checks Q7 and Q9 in `TEST_PLAN.md`.
