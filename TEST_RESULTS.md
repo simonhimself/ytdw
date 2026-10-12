@@ -3,7 +3,7 @@
 ## Background summary queue, Phase 2 — October 12, 2026
 
 Local validation on branch `feat/summary-queue`; checks Q1–Q10 in `TEST_PLAN.md`.
-Nothing pushed, deployed, or applied to a remote database yet.
+Nothing pushed or deployed to production.
 
 - `npm run typecheck` and `git diff --check`: passed.
 - `npm test`: 57 of 57 passed (10 new queue tests, including turn-taking between users).
@@ -12,7 +12,16 @@ Nothing pushed, deployed, or applied to a remote database yet.
   passes at desktop and mobile.
 - Visual check of the box and header menu at desktop (light) and mobile (dark) against
   mocked APIs.
-- Not yet verified: a Workers Preview with real Turnstile, YouTube, and Workers AI.
+- Applied `0003_summary_queue.sql` to the shared preview database `ytdw-preview` and
+  deployed Preview `feat-summary-queue` (unique deployment `8018223a`; new
+  `QueueRunner` class under migration `v4`; container app
+  `ytdw_feat-summary-queue_Sandbox`, id `a03e5617-78db-4c10-835a-277f7640612a`, to delete
+  after merge). Smoke checks on `https://feat-summary-queue.previews.ytdw.fyi/`: `/` 200
+  with the queue markup; `GET`, `POST`, and `DELETE /api/queue*` without a session 401
+  JSON with `no-store`; served `app.js` contains the queue code; `/api/auth/me`
+  `{"user":null}`.
+- Not yet verified: a signed-in, verified run on the Preview with real Turnstile,
+  YouTube, and Workers AI (needs the owner's browser).
 
 ## Branch-agnostic Workers Previews — October 12, 2026
 
