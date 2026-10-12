@@ -65,8 +65,10 @@ test('signed out, a finished brief invites signing in to save it', async ({ page
   await page.getByRole('button', { name: 'Summarize', exact: true }).click();
   await expect(page.locator('#result-title')).toHaveText('First video brief');
   const hint = page.locator('#save-hint');
-  await expect(hint).toHaveText('Sign in to save this brief and read it later.');
-  await hint.getByRole('button', { name: 'Sign in' }).click();
+  await expect(hint).toContainText('Keep this brief');
+  await expect(hint).toContainText('Sign in to save it to your library and read it later.');
+  expect(await noHorizontalScroll(page)).toBe(true);
+  await hint.getByRole('button', { name: 'Sign in to save' }).click();
   const dialog = page.getByRole('dialog', { name: 'Sign in' });
   await dialog.getByLabel('Email').fill('reader@example.com');
   await dialog.getByLabel('Password').fill('correct horse battery');
