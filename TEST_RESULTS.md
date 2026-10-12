@@ -1,5 +1,19 @@
 # YT;DW Test Results
 
+## Queue cleanup fixes production release — October 12, 2026
+
+- Merged as simonhimself/ytdw#9 (menu wording for main-bar summaries, delayed menu
+  appearance, full-library refusal, re-adding failed videos, focus after a failed Add,
+  unverified several-links message, clearing the queue box on sign-out). No migration
+  or container change.
+- Before deploying, on `main` at `c8c5ee4`: `npm run typecheck` passed; `npm test` 58 of
+  58; `npm run test:ui` 295 passed, 8 skipped.
+- Deployed with `--containers-rollout=none` as version
+  `ae3d8cc9-1cf4-4e32-b68e-b2f0648a327d`. On `https://ytdw.fyi/`: `/`, `/library`,
+  `/account` 200; `GET` and `POST /api/queue` without a session 401 with `no-store`;
+  served `app.js` and `index.html` are identical to `main`.
+- Deleted the merged branch `claude/project-thread-prqta6`.
+
 ## Queue cleanup fixes — October 12, 2026
 
 Branch `claude/project-thread-prqta6`; checks Q2, Q5, Q9 and Q9b in `TEST_PLAN.md`.
