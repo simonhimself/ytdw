@@ -385,8 +385,10 @@ it is used, and the library stays a place for finished briefs only.
 - **Signed-out visitors** also see "Got several? **Queue several videos**". It opens
   the dialog in Create account mode ("Create an account to queue several videos.
   Their briefs land in your library.") and continues into the queue box after
-  sign-up (disabled until the email is verified). Under a finished brief, "**Sign
-  in** to save this brief and read it later." does what Save does: sign in, then save.
+  sign-up (disabled until the email is verified). Under the header of a finished
+  or shared brief, a blue-tinted "Keep this brief" card ("Sign in to save it to your
+  library and read it later.") with a **Sign in to save** button does what Save
+  does: sign in, then save. It disappears once signed in.
 - **Finishing:** while anything is queued or processing, the client re-checks
   `GET /api/queue` every 10 seconds when the tab is visible (and immediately when
   it becomes visible). When items finish it announces "N briefs are ready in your

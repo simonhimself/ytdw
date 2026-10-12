@@ -611,7 +611,6 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 .copy-button.is-saved[aria-disabled="true"] { color: var(--kumo-text-default); opacity: 1; cursor: default; }
 .copy-button.is-saved:hover { background: transparent; border-color: var(--kumo-hairline); }
 .share-note a { color: var(--kumo-text-default); text-underline-offset: 3px; }
-.share-note .link-button { padding: 0; font-size: inherit; }
 
 [data-view="library"] .composer, [data-view="library"] .intro, [data-view="library"] .shared-home { display: none; }
 [data-view="library"] .workspace { margin-top: 0; padding-top: 40px; }
@@ -869,6 +868,28 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 .queue-item__actions button { min-height: 32px; padding: 0 8px; color: var(--kumo-text-strong); background: none; border: 0; border-radius: var(--kumo-radius-control); font-size: var(--kumo-text-sm); cursor: pointer; }
 .queue-item__actions button:hover { color: var(--kumo-text-default); background: var(--kumo-recessed); }
 .queue-item__actions button[aria-disabled="true"] { opacity: 0.5; cursor: progress; }
+
+/* Signed-out invitation to save a brief, under the result header. */
+.save-callout {
+  display: flex;
+  margin: 20px 0 0;
+  padding: 14px 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  background: color-mix(in srgb, var(--kumo-brand) 7%, var(--kumo-base));
+  border: 1px solid color-mix(in srgb, var(--kumo-brand) 28%, var(--kumo-hairline));
+  border-radius: var(--kumo-radius);
+}
+.save-callout[hidden] { display: none; }
+.save-callout__text { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.save-callout__icon { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; color: var(--kumo-brand); background: color-mix(in srgb, var(--kumo-brand) 14%, transparent); border-radius: var(--kumo-radius-pill); }
+.save-callout__icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.save-callout__title { display: block; font-size: var(--kumo-text-base); font-weight: 600; }
+.save-callout__detail { display: block; margin-top: 1px; color: var(--kumo-text-subtle); font-size: var(--kumo-text-sm); }
+.save-callout__action { min-height: 36px; padding: 0 14px; color: #fff; background: var(--kumo-brand); border: 0; border-radius: var(--kumo-radius-control); font-size: var(--kumo-text-sm); font-weight: 600; white-space: nowrap; cursor: pointer; transition: background 150ms ease; }
+.save-callout__action:hover { background: var(--kumo-brand-hover); }
 
 @keyframes pulse { 50% { opacity: 0.32; transform: translateY(-1px); } }
 

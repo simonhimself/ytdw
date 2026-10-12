@@ -239,9 +239,15 @@
             <button id="delete-button" class="copy-button copy-button--danger" type="button" hidden>Delete</button>
           </div>
         </header>
+        <div id="save-hint" class="save-callout" hidden>
+          <div class="save-callout__text">
+            <span class="save-callout__icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M6 3.5h8a1 1 0 0 1 1 1V17l-5-3.2L5 17V4.5a1 1 0 0 1 1-1Z"/></svg></span>
+            <span><strong class="save-callout__title">Keep this brief</strong><span class="save-callout__detail">Sign in to save it to your library and read it later.</span></span>
+          </div>
+          <button id="save-hint-action" class="save-callout__action" type="button">Sign in to save</button>
+        </div>
         <p id="library-meta" class="share-note" hidden></p>
         <p id="save-note" class="share-note" hidden>Saved to your library. <a href="/library">Open library</a></p>
-        <p id="save-hint" class="share-note" hidden><button id="save-hint-action" class="link-button" type="button">Sign in</button> to save this brief and read it later.</p>
         <p id="save-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
         <p id="item-status" class="action-status sr-only" role="status" aria-atomic="true"></p>
         <p id="share-expiry" class="share-note" hidden></p>
