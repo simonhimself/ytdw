@@ -1,5 +1,20 @@
 # YT;DW Test Results
 
+## Queue cleanup fixes — October 12, 2026
+
+Branch `claude/project-thread-prqta6`; checks Q2, Q5, Q9 and Q9b in `TEST_PLAN.md`.
+
+- `npm run typecheck` and `git diff --check`: passed.
+- `npm test`: 58 passed. Updated checks: pasting into a full library returns
+  `libraryFull` without queuing; pasting a failed video again replaces it.
+- `npm run test:ui`: 296 passed, 8 skipped (16 new runs). The new checks (menu wording,
+  no menu flash for instant briefs, Library is full line, focus after a failed Add,
+  unverified several-links path, box cleared on sign-out) fail on the previous `app.js`.
+- `npm run test:integration`: 10 passed, 2 skipped.
+- Visual check of the header menu during a single-bar summary at desktop (light) and
+  mobile (dark).
+- Not yet checked by hand on a Preview or deployed.
+
 ## Queue review fixes production release — October 12, 2026
 
 - Merged as simonhimself/ytdw#8 (runner keeps an alarm for the in-flight item; header

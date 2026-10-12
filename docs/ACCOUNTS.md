@@ -286,8 +286,10 @@ besides its alarm.
      then the oldest item; marks it `processing` with `started_at`.
   4. Calls `summarizeBackground()` and applies the outcome (below).
   5. Sets the next alarm: 5 seconds after a finished job, at the deferral time
-     after `busy`, or at the earliest `next_attempt_at` when nothing is due. No
-     alarm when the queue is empty.
+     after `busy`, or at the earliest `next_attempt_at` when nothing is due. A row
+     still `processing` keeps an alarm at the end of its lease (one is also set
+     before each job), so a run killed mid-job by a deploy is recovered without
+     new activity. No alarm when the queue is empty.
 
 Outcomes:
 
@@ -316,8 +318,10 @@ queue_items(id TEXT PK /* uuid */, user_id TEXT FK ON DELETE CASCADE, video_id T
 Rows are never deleted by users: Remove sets `removed`, so the rolling quota is a
 `COUNT(*)` over the user's rows from the last 24 hours. Each URL is inserted
 with one `INSERT ... SELECT ... WHERE` that checks, in the same statement, that the
-video is not in the library, not already active in the queue, and that the user
-is under 50 for the window; the statements for one paste run as one D1 batch, so
+video is not in the library, not queued or processing, that the library has room
+(under 1,000), and that the user is under 50 for the window. A `failed` row for
+the same video is set to `removed` just before, under the same conditions, so
+pasting a failed video again replaces it (and uses a quota slot; Retry does not); the statements for one paste run as one D1 batch, so
 concurrent pastes cannot overshoot. The partial unique index backs up the
 duplicate check.
 
@@ -339,7 +343,7 @@ session's user; other users' ids look absent (404).
 type QueueItem = { id: string; videoId: string; status: "queued" | "processing" | "failed";
                    error: string | null; retryable: boolean; attempts: number; createdAt: number };
 type QueueResult = { url: string; videoId: string | null;
-                     status: "queued" | "duplicate" | "alreadyQueued" | "alreadySaved" | "invalid" | "overQuota";
+                     status: "queued" | "duplicate" | "alreadyQueued" | "alreadySaved" | "invalid" | "libraryFull" | "overQuota";
                      error?: string };
 type Quota = { used: number; limit: 50; remaining: number };
 ```
@@ -363,7 +367,7 @@ it is used, and the library stays a place for finished briefs only.
   **Add N to queue**; Escape closes it and Cmd/Ctrl+Enter submits. If every line
   is queued the box closes and a status message confirms it. Otherwise it stays
   open, lists each line that was not queued (already in library, already queued,
-  listed twice, not a YouTube link, over today's limit), and keeps only the lines
+  listed twice, not a YouTube link, library is full, over today's limit), and keeps only the lines
   worth fixing. Unverified accounts see the box disabled with "Verify your email
   to queue videos." alongside the existing verify banner.
 - **Header menu:** a spinner with a count appears next to Library only while
@@ -376,12 +380,17 @@ it is used, and the library stays a place for finished briefs only.
   width of the screen.
 - **Single-bar summaries** stay "read now": the brief opens on the page and is
   saved only when the user presses Save. While one runs, signed-in users also see
-  it in the header menu ("Summarizing on this page…", no actions); it disappears
-  when the request ends, including when the user leaves the page.
+  it in the header menu ("Summarizing on this page…", no actions) once it has run
+  for a second, so cached briefs never flash it; it disappears when the request
+  ends, including when the user leaves the page. With nothing queued, the menu
+  heading reads just "In progress" and hides the daily quota, since single-bar
+  briefs are not saved automatically and do not count towards it.
 - **Several links in the single bar:** Summarize stays disabled and "That's
   several links. **Queue them instead**" replaces the "Queue several videos" link;
   it moves the links into the queue box. Signed out, it reads "Sign up to queue
-  them" and opens the dialog in Create account mode.
+  them" and opens the dialog in Create account mode. Unverified, it reads "Verify
+  your email to queue them", leaves the links in place, and moves focus to the
+  verify banner's Resend button. Signing out clears anything left in the box.
 - **Signed-out visitors** also see "Got several? **Queue several videos**". It opens
   the dialog in Create account mode ("Create an account to queue several videos.
   Their briefs land in your library.") and continues into the queue box after
