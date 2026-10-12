@@ -143,6 +143,26 @@ After an approved deployment: create the D1 database, replace the placeholder
 then repeat A5 by hand on `https://ytdw.fyi/`. Local tests cannot validate real
 Turnstile widgets for the `auth` action or the production cookie over HTTPS.
 
+## Background summary queue (Phase 2)
+
+| ID | Check | Pass condition |
+| --- | --- | --- |
+| Q1 | API guards | `/api/queue*` needs a session (401, `no-store`); adding needs a verified email (403); JSON content type, matching Origin, and `LIBRARY_RATE_LIMIT` apply; bodies other than 1–10 strings are 400; unknown methods 405; malformed ids 404. |
+| Q2 | Per-URL results and dedupe | Each URL is reported in order: queued, duplicate (same paste), alreadyQueued (active or failed), alreadySaved (in the library), invalid (same URL check as the website), overQuota. |
+| Q3 | Quota | 50 per user per rolling 24 hours, counting removed and failed items; rows older than 24 hours stop counting; two concurrent pastes cannot exceed 50. |
+| Q4 | Runner | One item at a time through `Coordinator.summarizeBackground`; finished briefs are saved unread with the snapshot's title and channel; nothing remains in the queue. |
+| Q5 | Failures | 400s (over six hours, no captions) fail at once without Retry; 503/504 back off and fail as retryable after 5 attempts, other failures after 3; Retry resets attempts without spending quota; a full library fails without Retry. |
+| Q6 | Fairness | While a website job runs, queued work stays queued with no attempt counted and both waiting places stay available to visitors; background work never leaves fewer than two of the five admission places; cached results are served immediately. |
+| Q7 | Remove and recovery | Remove during processing discards the result; a row left processing past its lease is retried; with nothing to do the runner sets no alarm. |
+| Q8 | Isolation | Another user's items look absent for list, Retry, and Remove; both users can queue the same video. |
+| Q9 | UI (desktop/mobile, both themes) | Link and box only for signed-in users on the home page; box opens on demand, counts lines, closes with Cancel/Escape and restores focus; per-line problems keep only fixable lines; more than 10 lines is refused client-side; unverified users see the disabled box; header menu appears only while items exist, lists states, Retry/Remove work and keep focus, finished briefs are announced and update the badge, the menu fits the viewport and closes on outside click, Escape, and sign-out. |
+| Q10 | Integration | Real Worker, runner alarms, and D1: sign up, see the disabled box, verify via the emailed link, queue two videos plus an invalid line, watch the header menu disappear, and find both briefs unread in the library. |
+
+Backend checks Q1–Q8 run in `npm test` with the runner's waits shortened by the harness;
+Q9 in `npm run test:ui`; Q10 in `npm run test:integration`. On a Workers Preview, apply
+`0003_summary_queue.sql` to the preview database first, then check Q10 by hand with a real
+browser (Turnstile blocks automated sign-in).
+
 ## Account migration
 
 | ID | Check | Pass condition |

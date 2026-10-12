@@ -12,6 +12,9 @@ application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 - `src/auth.ts` (email/password accounts, sessions) and `src/library.ts` (saved
   briefs) store data in D1 (`DB`, schema in `migrations/`); `src/http.ts` holds
   shared request/response helpers. `docs/ACCOUNTS.md` is the spec and API contract.
+- `src/queue.ts` is the background summary queue: `/api/queue` routes and the
+  global `QueueRunner` Durable Object, which feeds items through
+  `Coordinator.summarizeBackground` only when the website leaves capacity spare.
 - `public/index.html` contains the single-page UI structure.
 - `public/app.js` contains client behavior; `public/theme.js` sets the initial theme.
 - `public/styles.css` contains the Kumo-based light and dark themes.

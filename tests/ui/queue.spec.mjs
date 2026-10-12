@@ -1,0 +1,206 @@
+import { test, expect } from '@playwright/test';
+import { setupPage, mockAccount, mockQueue, queueItem, makeItem } from './helpers.mjs';
+
+const user = { email: 'reader@example.com' };
+const ids = ['38vwjWpHFes', 'PJrntzMA4iQ', 'dQw4w9WgXcQ', 'aqz-KE-bpKQ', 'M7lc1UVf-VE'];
+const link = id => `https://youtu.be/${id}`;
+const itemId = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+test.beforeEach(async ({ page }, info) => {
+  await setupPage(page, info);
+  page.errors = [];
+  page.on('pageerror', error => page.errors.push(error.message));
+});
+test.afterEach(({ page }) => { expect(page.errors).toEqual([]); });
+
+const noHorizontalScroll = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+// The library page only polls while the tab is visible; tests trigger the check directly.
+const recheck = page => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+
+test('the queue link and header menu only exist for signed-in users, and the home page stays clean', async ({ page }) => {
+  const account = await mockAccount(page);
+  await mockQueue(page, account);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeVisible();
+  await expect(page.locator('#queue-toggle')).toBeHidden();
+  await expect(page.locator('#queue-box')).toBeHidden();
+  await expect(page.locator('#queue-menu')).toBeHidden();
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await setupPage(page, test.info());
+  const signedIn = await mockAccount(page, { user });
+  await mockQueue(page, signedIn);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Queue several videos' })).toBeVisible();
+  // Nothing pending: no header menu, and the box is closed.
+  await expect(page.locator('#queue-menu')).toBeHidden();
+  await expect(page.locator('#queue-box')).toBeHidden();
+  expect(await noHorizontalScroll(page)).toBe(true);
+  // Other pages have no queue box or link.
+  await page.goto('/library');
+  await expect(page.locator('#queue-toggle')).toBeHidden();
+});
+
+test('the box opens on demand, counts lines, and closes with Cancel or Escape', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account, { used: 6 });
+  await page.goto('/');
+  const open = page.getByRole('button', { name: 'Queue several videos' });
+  await expect(open).toHaveAttribute('aria-expanded', 'false');
+  await open.click();
+  const box = page.getByLabel('Queue several videos');
+  await expect(box).toBeFocused();
+  await expect(open).toBeHidden();
+  await expect(page.locator('#queue-left')).toHaveText('44 of 50 left today');
+  const submit = page.locator('#queue-submit');
+  await expect(submit).toBeDisabled();
+  await expect(submit).toHaveText('Add to queue');
+  await box.fill(`${link(ids[0])}\n\n  ${link(ids[1])}  \n`);
+  await expect(submit).toHaveText('Add 2 to queue');
+  await expect(submit).toBeEnabled();
+  expect(await noHorizontalScroll(page)).toBe(true);
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('#queue-box')).toBeHidden();
+  await expect(open).toBeFocused();
+  await expect(open).toHaveAttribute('aria-expanded', 'false');
+  await open.click();
+  await expect(box).toHaveValue(`${link(ids[0])}\n\n  ${link(ids[1])}  \n`);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#queue-box')).toBeHidden();
+  await expect(open).toBeFocused();
+});
+
+test('queuing valid links closes the box and shows progress in the header', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  const queue = await mockQueue(page, account);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  await page.getByLabel('Queue several videos').fill([link(ids[0]), `https://www.youtube.com/watch?v=${ids[1]}`].join('\n'));
+  await page.getByRole('button', { name: 'Add 2 to queue' }).click();
+  await expect(page.locator('#queue-box')).toBeHidden();
+  await expect(page.locator('#queue-announcement')).toHaveText('2 videos queued. They land in your library when ready.');
+  const post = queue.requests.find(r => r.method === 'POST');
+  expect(post).toMatchObject({ path: '/api/queue', contentType: 'application/json', body: { urls: [link(ids[0]), `https://www.youtube.com/watch?v=${ids[1]}`] } });
+  const menu = page.locator('#queue-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveAttribute('data-active', '');
+  await expect(page.locator('#queue-summary')).toHaveAttribute('aria-label', '2 videos in progress');
+  await expect(page.locator('#queue-count')).toHaveText('2');
+  // The single-video flow is untouched.
+  await expect(page.getByRole('button', { name: 'Summarize', exact: true })).toBeVisible();
+  // Cmd/Ctrl+Enter submits from the box.
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  await page.getByLabel('Queue several videos').fill(link(ids[2]));
+  await page.keyboard.press('ControlOrMeta+Enter');
+  await expect(page.locator('#queue-count')).toHaveText('3');
+});
+
+test('per-line problems keep the box open with only the lines that need attention', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account, { results: { [ids[1]]: 'alreadySaved', [ids[2]]: 'alreadyQueued', [ids[3]]: 'overQuota' } });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  const box = page.getByLabel('Queue several videos');
+  await box.fill([link(ids[0]), link(ids[1]), link(ids[2]), link(ids[3]), 'https://vimeo.com/123', link(ids[0])].join('\n'));
+  await page.getByRole('button', { name: 'Add 6 to queue' }).click();
+  const results = page.locator('#queue-results li');
+  await expect(results).toHaveText([
+    /Already in library\s*youtu.be\/PJrntzMA4iQ/, /Already queued\s*youtu.be\/dQw4w9WgXcQ/, /Over today’s limit\s*youtu.be\/aqz-KE-bpKQ/,
+    /Not a YouTube link\s*https:\/\/vimeo.com\/123/, /Listed twice\s*youtu.be\/38vwjWpHFes/,
+  ]);
+  await expect(box).toHaveValue(`${link(ids[3])}\nhttps://vimeo.com/123`);
+  await expect(box).toBeFocused();
+  await expect(page.locator('#queue-announcement')).toHaveText('1 video queued. It lands in your library when ready. 5 of 6 need attention.');
+  await expect(page.locator('#queue-count')).toHaveText('1');
+  expect(await noHorizontalScroll(page)).toBe(true);
+});
+
+test('more than 10 lines is refused before any request', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  const queue = await mockQueue(page, account);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  await page.getByLabel('Queue several videos').fill(Array.from({ length: 11 }, (_, n) => link(`aaaaaaaaa${String(n).padStart(2, '0')}`)).join('\n'));
+  await page.getByRole('button', { name: 'Add 11 to queue' }).click();
+  await expect(page.locator('#queue-error')).toHaveText('Paste at most 10 URLs at a time. You have 11.');
+  await expect(page.getByLabel('Queue several videos')).toHaveAttribute('aria-invalid', 'true');
+  expect(queue.requests.filter(r => r.method === 'POST')).toEqual([]);
+});
+
+test('unverified accounts see why the box is unavailable', async ({ page }) => {
+  const account = await mockAccount(page, { user: { ...user, emailVerified: false } });
+  const queue = await mockQueue(page, account);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Queue several videos' }).click();
+  await expect(page.getByLabel('Queue several videos')).toBeDisabled();
+  await expect(page.locator('#queue-submit')).toBeDisabled();
+  await expect(page.locator('#queue-left')).toHaveText('Verify your email to queue videos.');
+  await expect(page.locator('#verify-banner')).toBeVisible();
+  expect(queue.requests.filter(r => r.method === 'POST')).toEqual([]);
+});
+
+test('the header menu lists progress, retries and removes items, and announces finished briefs', async ({ page }) => {
+  const account = await mockAccount(page, { user, items: [makeItem('1')] });
+  const queue = await mockQueue(page, account, { used: 3, items: [
+    queueItem(itemId(1), ids[0], { status: 'processing' }),
+    queueItem(itemId(2), ids[1], { error: 'YouTube is busy', attempts: 1 }),
+    queueItem(itemId(3), ids[2], { status: 'failed', error: 'YouTube is refusing caption requests', attempts: 5 }),
+    queueItem(itemId(4), ids[3], { status: 'failed', error: 'This video has no English captions', retryable: false, attempts: 1 }),
+  ] });
+  await page.goto('/');
+  const summary = page.locator('#queue-summary');
+  await expect(summary).toHaveAttribute('aria-label', '2 videos in progress, 2 failed');
+  await summary.click();
+  const rows = page.locator('#queue-list li');
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(0)).toContainText('Summarizing…');
+  await expect(rows.nth(1)).toContainText('Waiting to try again');
+  await expect(rows.nth(2)).toContainText('YouTube is refusing caption requests');
+  await expect(rows.nth(0).getByRole('link', { name: `youtu.be/${ids[0]}` })).toHaveAttribute('href', `https://www.youtube.com/watch?v=${ids[0]}`);
+  await expect(page.locator('#queue-quota')).toHaveText('47 of 50 left today');
+  // Retry only where it can help.
+  await expect(rows.nth(2).getByRole('button', { name: `Retry youtu.be/${ids[2]}` })).toBeVisible();
+  await expect(rows.nth(3).getByRole('button', { name: /Retry/ })).toHaveCount(0);
+  const popover = page.locator('.queue-popover');
+  const box = await popover.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box.x >= 0 && box.x + box.width <= viewport.width).toBe(true);
+
+  await rows.nth(2).getByRole('button', { name: `Retry youtu.be/${ids[2]}` }).click();
+  await expect(rows.nth(2)).toContainText('Queued');
+  expect(queue.requests.find(r => r.path.endsWith('/retry'))).toMatchObject({ method: 'POST', path: `/api/queue/${itemId(3)}/retry`, contentType: 'application/json' });
+  await rows.nth(3).getByRole('button', { name: `Remove youtu.be/${ids[3]}` }).click();
+  await expect(rows).toHaveCount(3);
+  await expect(page.locator('#account-status')).toHaveText(`Removed youtu.be/${ids[3]}.`);
+  expect(queue.requests.find(r => r.method === 'DELETE')).toMatchObject({ path: `/api/queue/${itemId(4)}`, contentType: 'application/json' });
+  await expect(page.locator(':focus')).toHaveText('Remove');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#queue-menu')).not.toHaveAttribute('open', '');
+  await expect(summary).toBeFocused();
+
+  // The processing video finishes: it leaves the queue and lands in the library.
+  queue.items = queue.items.filter(item => item.id !== itemId(1));
+  account.items.unshift(makeItem('2', { title: 'Freshly finished' }));
+  await recheck(page);
+  await expect(page.locator('#account-status')).toHaveText('1 brief is ready in your library.');
+  await expect(page.locator('#library-badge')).toHaveText('2');
+  await expect(page.locator('#queue-count')).toHaveText('2');
+  // Everything done: the menu disappears.
+  queue.items = [];
+  await recheck(page);
+  await expect(page.locator('#queue-menu')).toBeHidden();
+});
+
+test('the header menu closes on outside clicks and is gone after sign-out', async ({ page }) => {
+  const account = await mockAccount(page, { user });
+  await mockQueue(page, account, { items: [queueItem(itemId(1), ids[0])] });
+  await page.goto('/');
+  await page.locator('#queue-summary').click();
+  await expect(page.locator('.queue-popover')).toBeVisible();
+  await page.locator('.intro').click();
+  await expect(page.locator('.queue-popover')).toBeHidden();
+  await page.locator('#account-menu summary').click();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#queue-menu')).toBeHidden();
+  await expect(page.locator('#queue-toggle')).toBeHidden();
+});
