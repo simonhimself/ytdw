@@ -1389,3 +1389,35 @@ test('the runner takes turns between users instead of draining one user first', 
   assert.ok(await started(bob.userId, 510) < await started(alice.userId, 501));
   assert.ok(await started(bob.userId, 510) < await started(alice.userId, 502));
 });
+
+test('funnel counts are daily aggregates, recorded only for successful actions', async () => {
+  const day = new Date().toISOString().slice(0, 10);
+  const counts = async () => Object.fromEntries((await (await queueDb()).prepare('SELECT event, count FROM daily_events WHERE day = ?').bind(day).all()).results.map(row => [row.event, row.count]));
+  const delta = (before, after) => Object.fromEntries(Object.entries(after).map(([event, n]) => [event, n - (before[event] ?? 0)]).filter(([, n]) => n > 0));
+  const before = await counts();
+
+  assert.equal((await h.post(video(2101), 'funnel')).status, 200);
+  const { cookie } = await verifiedUser('funnel@example.com');
+  assert.equal((await call('/api/auth/signup', { method: 'POST', body: credentials('funnel@example.com') })).status, 409);
+  const signedIn = await h.request('/api/summarize', { method: 'POST', headers: { ...json, cookie, 'x-test-scope': 'funnel' }, body: JSON.stringify({ url: youtu(2102), turnstileToken: 'fixture-token' }) });
+  assert.equal(signedIn.status, 200);
+  const { share } = await signedIn.json();
+  assert.equal((await call('/api/library', { method: 'POST', body: { shareId: share.url.split('/').pop() }, cookie })).status, 201);
+  assert.equal((await call('/api/library', { method: 'POST', body: { shareId: share.url.split('/').pop() }, cookie })).status, 200);
+  assert.equal((await enqueue(cookie, [youtu(2103), youtu(2103), 'not a url'])).status, 200);
+  assert.equal((await call('/api/events', { method: 'POST', body: { event: 'share_view' } })).status, 204);
+  assert.equal((await call('/api/events', { method: 'POST', body: { event: 'share_visit' } })).status, 204);
+  assert.equal((await call('/api/events', { method: 'POST', body: { event: 'checkout_completed' } })).status, 400);
+  assert.equal((await call('/api/events', { method: 'POST', body: { event: 'share_view' }, headers: { origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await call('/api/events')).status, 405);
+
+  const expected = { brief_signed_out: 1, brief_signed_in: 1, signup: 1, brief_saved: 1, queue_paste: 1, queue_added: 1, share_view: 1, share_visit: 1 };
+  // Counting runs after the response; wait for the background writes to land.
+  const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+  await waitFor(async () => same(delta(before, await counts()), expected));
+
+  const columns = (await (await queueDb()).prepare('PRAGMA table_info(daily_events)').all()).results.map(row => row.name);
+  assert.deepEqual(columns, ['day', 'event', 'count']);
+  const stats = await (await h.request('/stats', { headers: { authorization: 'Bearer fixture-diagnostic-token' } })).json();
+  assert.ok(stats.funnel.some(row => row.day === day && row.event === 'signup' && row.count >= 1));
+});

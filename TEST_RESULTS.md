@@ -1,5 +1,18 @@
 # YT;DW Test Results
 
+## Funnel measurement and share credit — October 15, 2026
+
+Branch `claude/project-thread-hpr5nd`; checks F1–F4 in `TEST_PLAN.md`. Adds migration
+`0004_daily_events.sql`; no container change.
+
+- `npm run typecheck` and `git diff --check`: passed.
+- `npm test`: 59 passed (1 new: F1, F2).
+- `npm run test:ui`: 300 passed, 8 skipped (new: F3 in all four projects).
+- `npm run test:integration`: 10 passed, 2 skipped.
+- Visual check of a shared brief with the credit line at desktop and mobile widths in
+  light and dark themes.
+- Not yet checked on a Preview (F4) or deployed.
+
 ## Queue cleanup fixes production release — October 12, 2026
 
 - Merged as simonhimself/ytdw#9 (menu wording for main-bar summaries, delayed menu

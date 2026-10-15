@@ -127,6 +127,25 @@ test('unavailable recipients see recovery instructions without loading Turnstile
   await expect(page.getByRole('link', { name: 'Summarize another video' })).toBeVisible();
 });
 
+test('shared briefs credit YT;DW and count the view; the credit link counts the visit once', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.shared-credit')).toBeHidden();
+  await page.goto('/s/75aad086-16f5-47f3-a449-9a3fd1d2e878');
+  await expect(page.locator('#result')).toBeVisible();
+  const credit = page.locator('.shared-credit');
+  await expect(credit).toBeVisible();
+  await expect(credit).toContainText('Summarized by YT;DW');
+  await expect(credit.getByRole('link', { name: 'YT;DW' })).toHaveAttribute('href', '/?ref=share');
+  await expect(page.getByRole('link', { name: 'Summarize another video' })).toHaveAttribute('href', '/?ref=share');
+  await expect.poll(() => page.__events).toEqual(['share_view']);
+  await credit.getByRole('link', { name: 'YT;DW' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect.poll(() => page.__events).toEqual(['share_view', 'share_visit']);
+  await page.reload();
+  await expect(page.locator('#youtube-url')).toBeVisible();
+  expect(page.__events).toEqual(['share_view', 'share_visit']);
+});
+
 test('landing logo stays large and mobile inputs do not use zoom-triggering small text', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#page-title')).toHaveCSS('font-size', page.viewportSize().width < 640 ? '48px' : '64px');

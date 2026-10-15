@@ -55,6 +55,8 @@ export async function setupPage(page, info) {
   await page.route('**/api/summarize', route => route.fulfill({ json: makeBrief(route.request().postDataJSON().url) }));
   await page.route('**/api/shares/*', route => route.fulfill({ json: makeBrief() }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: { user: null } }));
+  page.__events = [];
+  await page.route('**/api/events', route => { page.__events.push(route.request().postDataJSON().event); return route.fulfill({ status: 204, body: '' }); });
 }
 
 export function makeItem(id, overrides = {}) {
