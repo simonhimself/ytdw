@@ -389,6 +389,9 @@ h2, .result__meta, .result__summary { overflow-wrap: anywhere; }
 #share-url { margin-top: 6px; padding: 8px; border: 1px solid var(--kumo-hairline); border-radius: var(--kumo-radius-control); }
 .shared-home { display: none; }
 [data-view="shared"] .shared-home { display: inline-block; }
+.shared-credit { display: none; margin: 24px 0 0; color: var(--kumo-text-subtle); font-size: var(--kumo-text-sm); }
+.shared-credit a { color: var(--kumo-text-default); font-weight: 600; text-underline-offset: 3px; }
+[data-view="shared"] .shared-credit { display: block; }
 [data-view="shared"] .composer { display: none; }
 [data-view="shared"] .workspace { padding-top: 40px; }
 [data-view="shared"] .intro { display: none; }

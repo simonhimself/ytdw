@@ -326,6 +326,11 @@
     return response.json();
   }
 
+  // Anonymous daily counts for the funnel (/stats); a failure is never shown.
+  function countEvent(event) {
+    fetch("/api/events", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event }), keepalive: true }).catch(() => {});
+  }
+
   async function loadSharedBrief() {
     showStatus("Opening the shared brief…", "Loading the saved result");
     try {
@@ -334,6 +339,7 @@
       if (response.status === 404) throw new Error("This link has expired or is unavailable. Ask the sender for the original video URL, then summarize it again.");
       if (!response.ok) throw new Error(data.error || "Please reload to try again.");
       showResult(data);
+      countEvent("share_view");
     } catch (requestError) {
       error.querySelector("strong").textContent = "Shared brief unavailable";
       byId("error-message").textContent = requestError.name === "TimeoutError" ? "Loading took too long. Please reload to try again." : requestError.message;
@@ -1977,12 +1983,15 @@
 
   // ---- Init ---------------------------------------------------------------------
 
-  // The duplicate-signup notice email links to /?auth=forgot. Consume the param right away so a
-  // reload doesn't reopen the dialog; other params (such as ?url=) are left alone.
+  // The duplicate-signup notice email links to /?auth=forgot, and share pages link to
+  // /?ref=share. Consume both right away so a reload doesn't reopen the dialog or count
+  // the visit twice; other params (such as ?url=) are left alone.
   const startParams = new URLSearchParams(location.search);
   const wantsForgot = startParams.get("auth") === "forgot";
-  if (startParams.has("auth")) {
+  if (startParams.get("ref") === "share") countEvent("share_visit");
+  if (startParams.has("auth") || startParams.has("ref")) {
     startParams.delete("auth");
+    startParams.delete("ref");
     const rest = startParams.toString();
     history.replaceState({}, "", `${location.pathname}${rest ? `?${rest}` : ""}${location.hash}`);
   }

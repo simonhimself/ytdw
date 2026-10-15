@@ -15,6 +15,8 @@ application is available at `https://ytdw.fyi/` in the `simonhimself` account.
 - `src/queue.ts` is the background summary queue: `/api/queue` routes and the
   global `QueueRunner` Durable Object, which feeds items through
   `Coordinator.summarizeBackground` only when the website leaves capacity spare.
+- `src/metrics.ts` keeps anonymous daily funnel counts in D1 (`daily_events`),
+  returned by `/stats`; see "Funnel measurement" in `docs/OPERATIONS.md`.
 - `public/index.html` contains the single-page UI structure.
 - `public/app.js` contains client behavior; `public/theme.js` sets the initial theme.
 - `public/styles.css` contains the Kumo-based light and dark themes.

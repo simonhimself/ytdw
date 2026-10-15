@@ -165,6 +165,17 @@ Q9 in `npm run test:ui`; Q10 in `npm run test:integration`. On a Workers Preview
 `0003_summary_queue.sql` to the preview database first, then check Q10 by hand with a real
 browser (Turnstile blocks automated sign-in).
 
+## Funnel measurement and share credit
+
+| ID | Check | Pass condition |
+| --- | --- | --- |
+| F1 | Server counts | One `daily_events` row per day and event: signed-out and signed-in summaries, signup (not a duplicate signup), saving (not an already-saved brief), a queue paste plus the number of videos queued; the table has only `day`, `event` and `count` columns; `/stats` returns them as `funnel` behind the diagnostic token. |
+| F2 | Client events | `POST /api/events` accepts only `share_view` and `share_visit` (204); other names 400, a foreign Origin 403, GET 405. |
+| F3 | Share credit (UI, desktop/mobile, both themes) | A shared brief shows "Summarized by YT;DW…" under the brief, linking to `/?ref=share` (as does "Summarize another video"); the home page never shows it; loading a shared brief reports `share_view`; arriving at `/?ref=share` reports `share_visit` once and removes the parameter, so a reload does not count again. |
+| F4 | Preview / production | After applying `0004_daily_events.sql`, open a share link, follow the credit link, summarize a video, then check `/stats` shows `share_view`, `share_visit` and `brief_signed_out` for today. With Web Analytics on, the browser console shows no CSP errors for `cloudflareinsights.com`. |
+
+F1–F2 run in `npm test`, F3 in `npm run test:ui`, F4 by hand.
+
 ## Account migration
 
 | ID | Check | Pass condition |

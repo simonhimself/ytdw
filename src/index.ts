@@ -4,6 +4,7 @@ import { handleAccount, isAccountPath } from "./account";
 import { handleAuth } from "./auth";
 import { BadRequestError, SHARE_ID, readJsonObject, verifyTurnstile } from "./http";
 import { handleLibrary } from "./library";
+import { funnelStats, handleEvents, recordFunnel } from "./metrics";
 import { handleQueue } from "./queue";
 import { createShare } from "./share";
 import { normalizeYouTubeUrl } from "./video-url";
@@ -38,7 +39,7 @@ const RECOVERY_GRACE_MS = 10_000;
 const CANONICAL_HOST = "ytdw.fyi";
 const ALIAS_HOSTS = new Set(["www.ytdw.fyi", "ytdw.simons.workers.dev"]);
 const SECURITY_HEADERS = {
-  "content-security-policy": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; object-src 'none'; frame-ancestors 'none'",
+  "content-security-policy": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com https://cloudflareinsights.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; object-src 'none'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   "referrer-policy": "strict-origin-when-cross-origin",
@@ -812,6 +813,7 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       }
       if (isAccountPath(requestUrl.pathname)) return await handleAccount(request, env, ctx);
       if (requestUrl.pathname.startsWith("/api/auth/")) return await handleAuth(request, env, ctx);
+      if (requestUrl.pathname === "/api/events") return await handleEvents(request, env);
       if (requestUrl.pathname === "/api/library" || requestUrl.pathname.startsWith("/api/library/")) return await handleLibrary(request, env);
       if (requestUrl.pathname === "/api/queue" || requestUrl.pathname.startsWith("/api/queue/")) return await handleQueue(request, env);
       if (request.method === "POST" && requestUrl.pathname === "/api/summarize") {
@@ -831,7 +833,7 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       }
       if (requestUrl.pathname === "/stats") {
         const coordinator = env.COORDINATOR.get(env.COORDINATOR.idFromName("global"));
-        return Response.json({ transcriptSources: await coordinator.transcriptSources() }, { headers: SHARE_HEADERS });
+        return Response.json({ transcriptSources: await coordinator.transcriptSources(), funnel: await funnelStats(env) }, { headers: SHARE_HEADERS });
       }
 
       const sandbox = getSandbox(env.Sandbox, "summarizer", {
@@ -865,6 +867,7 @@ export default {
       return new Response(null, { status, headers: { location: `https://${CANONICAL_HOST}${url.pathname}${url.search}`, ...SECURITY_HEADERS } });
     }
     const response = await routeRequest(request, env, ctx);
+    recordFunnel(request, response, env, ctx);
     const secured = new Response(response.body, response);
     // _headers covers static assets; API and rewritten share responses need the
     // same policy explicitly, including their error paths.

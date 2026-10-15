@@ -162,6 +162,38 @@ a way to prefill the original video URL and generate another brief.
   them one at a time through the Coordinator, and only when no website job is running
   or waiting and none started in the last 30 seconds. See `docs/ACCOUNTS.md`.
 
+## Funnel measurement
+
+Two sources, neither of which stores who did what:
+
+- **Cloudflare Web Analytics** (visits, referrers, countries; no cookies, so no
+  consent banner). Turn it on once in the Cloudflare dashboard under Analytics & Logs →
+  Web Analytics → add `ytdw.fyi` with automatic setup; Cloudflare then injects its
+  beacon into HTML pages. The CSP allows `https://static.cloudflareinsights.com`
+  (script) and `https://cloudflareinsights.com` (beacon) for this.
+- **Daily event counts** in the D1 table `daily_events` (migration `0004`): one row per
+  UTC day and event with a count, nothing else. The Worker counts after the response
+  is sent, so a counting failure only logs `funnel_count_failed`. `GET /stats` with
+  `Authorization: Bearer $TEST_TOKEN` returns them as `funnel` (newest day first, up to
+  400 rows) next to `transcriptSources`.
+
+| Event | Counted when |
+| --- | --- |
+| `brief_signed_out`, `brief_signed_in` | `POST /api/summarize` returns a brief (cached or new) |
+| `signup` | an account is created (201) |
+| `email_verified` | a verification link succeeds (a repeat click counts again) |
+| `brief_saved` | a brief is newly saved to a library (201) |
+| `queue_paste`, `queue_added` | a queue paste succeeds; `queue_added` adds the number of videos actually queued |
+| `account_deleted` | an account is deleted |
+| `share_view` | a shared brief page loads a brief (reported by the page) |
+| `share_visit` | someone follows the "Summarized by YT;DW" link from a shared brief to `/?ref=share` (reported by the page) |
+
+The page reports the last two through `POST /api/events`, which accepts only those
+names, needs a JSON content type and a matching Origin, and shares the per-IP
+`SHARE_READ_RATE_LIMIT` budget (over the limit it answers 204 without counting).
+These are aggregate counts for spotting trends, not exact numbers: anyone can post a
+`share_*` event within that limit.
+
 ## Maintenance and validation
 
 Run `npm audit` when updating development tools and keep `package-lock.json` in
